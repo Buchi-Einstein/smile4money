@@ -1,0 +1,10 @@
+[package]
+name = "smile4money-common"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
