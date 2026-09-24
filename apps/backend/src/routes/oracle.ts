@@ -1,11 +1,7 @@
 import { Router } from 'express';
 import { matchStore } from '../store/index.js';
 import { authenticate } from '../middleware/auth.js';
-import { fetchLichessResult, GameNotFoundError } from '../fetchers/lichess.js';
-import { fetchChessDotComResult } from '../fetchers/chessdotcom.js';
-import { verifyPlayerIdentities } from '../services/player-identity.js';
-import type { PlayerIdentityMap } from '../services/player-identity.js';
-import logger from '../logger.js';
+import { validateSubmitResultInput, verifyGameResult } from '../services/oracle-service.js';
 
 const router = Router();
 const store = matchStore;
@@ -43,118 +39,35 @@ router.post('/submit-result', async (req, res) => {
     return res.status(400).json({ error: 'Request body must be JSON' });
   }
 
-  const { matchId, gameId, platform, username } = payload;
-
-  // Validate input
-  if (typeof matchId !== 'number' || !Number.isFinite(matchId)) {
-    return res.status(400).json({ error: 'matchId must be a number' });
-  }
-
-  if (!gameId || typeof gameId !== 'string' || gameId.length === 0) {
-    return res.status(400).json({ error: 'gameId is required' });
-  }
-
-  if (!platform || (platform !== 'lichess' && platform !== 'chessdotcom')) {
-    return res.status(400).json({ error: 'platform must be lichess or chessdotcom' });
-  }
-
-  if (platform === 'chessdotcom' && (!username || typeof username !== 'string')) {
-    return res.status(400).json({ error: 'username is required for chessdotcom' });
+  const inputError = validateSubmitResultInput(payload);
+  if (inputError) {
+    return res.status(400).json({ error: inputError });
   }
 
   try {
-    // Fetch the match record
-    const match = await store.findByGameId(gameId);
-    if (!match) {
-      const storeSize = await store.count();
+    const result = await verifyGameResult(store, {
+      matchId: payload.matchId,
+      gameId: payload.gameId,
+      platform: payload.platform,
+      username: typeof payload.username === 'string' ? payload.username : undefined,
+    });
 
-      if (storeSize === 0) {
-        // The store is empty — most likely the process restarted and the
-        // in-memory store lost all match records. This is a persistence
-        // configuration problem, not a bad request from the caller.
-        logger.error(
-          {
-            game_id: gameId,
-            match_id: matchId,
-            store_count: 0,
-          },
-          'oracle_match_not_found_empty_store',
-        );
-        return res.status(404).json({
-          error: 'Match not found',
-          details: `No match found for gameId: ${gameId}. The match store is empty — the server may have restarted and lost in-memory state. Check your persistence configuration (QUEUE_STORE env var) and ensure matches are written to a durable store before deploying.`,
-          hint: 'persistence_loss_suspected',
-        });
-      }
-
-      logger.warn(
-        {
-          game_id: gameId,
-          match_id: matchId,
-          store_count: storeSize,
-        },
-        'oracle_match_not_found',
-      );
-      return res.status(404).json({
-        error: 'Match not found',
-        details: `No match found for gameId: ${gameId}`,
-      });
+    if (!result.ok) {
+      const body: Record<string, unknown> = { error: result.error };
+      if (result.details) body.details = result.details;
+      if (result.hint) body.hint = result.hint;
+      return res.status(result.status).json(body);
     }
 
-    // Ensure player identities were captured at match creation
-    if (!match.player1Username || !match.player2Username) {
-      return res.status(400).json({
-        error: 'Player identities not recorded',
-        details: 'Match was created without capturing player identities from the API',
-      });
-    }
-
-    // Fetch the game result from the chess platform API
-    let apiResult;
-    try {
-      if (platform === 'lichess') {
-        apiResult = await fetchLichessResult(gameId);
-      } else {
-        apiResult = await fetchChessDotComResult(username, gameId);
-      }
-    } catch (error) {
-      if (error instanceof GameNotFoundError) {
-        return res.status(404).json({
-          error: 'Game not found on platform',
-          details: error.message,
-        });
-      }
-      throw error;
-    }
-
-    // Create the identity map from the match record
-    const identityMap: PlayerIdentityMap = {
-      player1Address: match.player1,
-      player1Username: match.player1Username,
-      player2Address: match.player2,
-      player2Username: match.player2Username,
-      platform,
-    };
-
-    // Verify that the API players match the registered players
-    const verification = verifyPlayerIdentities(match, apiResult, identityMap);
-    if (!verification.valid) {
-      return res.status(400).json({
-        error: 'Player identity verification failed',
-        details: verification.error,
-      });
-    }
-
-    // If verification passes, return the result that can be submitted on-chain
     return res.status(200).json({
-      verified: true,
-      matchId: match.matchId,
-      gameId: apiResult.gameId,
-      result: apiResult.result,
-      whitePlayer: apiResult.whitePlayer,
-      blackPlayer: apiResult.blackPlayer,
-      status: apiResult.status,
-      message: 'Game result verified. Players match registered identities.',
+      verified: result.verified,
+      matchId: result.matchId,
+      gameId: result.gameId,
+      result: result.result,
+      whitePlayer: result.whitePlayer,
+      blackPlayer: result.blackPlayer,
+      status: result.status,
+      message: result.message,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
