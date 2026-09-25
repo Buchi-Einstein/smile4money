@@ -107,9 +107,12 @@ The script performs these steps in order:
 3. Builds both contracts (`escrow.wasm`, `oracle.wasm`) in release mode.
 4. Deploys the escrow contract to testnet.
 5. Deploys the oracle contract to testnet.
-6. Initializes the oracle contract (admin = deployer address).
-7. Initializes the escrow contract (oracle = oracle contract address, admin = deployer address).
-8. Writes `CONTRACT_ESCROW` and `CONTRACT_ORACLE` to `.env`.
+6. Fetches each deployed WASM hash with `stellar contract inspect` and compares it to the local artifact SHA-256.
+7. Initializes the oracle contract (admin = deployer address).
+8. Initializes the escrow contract (oracle = oracle contract address, admin = deployer address).
+9. Writes `CONTRACT_ESCROW` and `CONTRACT_ORACLE` to `.env`.
+
+The script stops with an error if either on-chain hash does not match the local build artifact. Successful checks log both hash values.
 
 **Expected output:**
 ```
