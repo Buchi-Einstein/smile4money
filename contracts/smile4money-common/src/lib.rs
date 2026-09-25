@@ -10,8 +10,16 @@
 //! Each contract has its own `Error` enum (required by `#[contracterror]`) but imports
 //! shared variants from [`SharedError`] and implements `From<SharedError>` to allow
 //! transparent conversion with the `?` operator.
+//!
+//! ## Constants
+//!
+//! Ledger-duration and identifier constants shared by the escrow and oracle
+//! contracts live in [`constants`] so that both contracts — and the frontend —
+//! agree on a single set of values.
 
 #![no_std]
+
+pub mod constants;
 
 use soroban_sdk::contracterror;
 

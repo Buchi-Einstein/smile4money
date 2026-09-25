@@ -124,8 +124,10 @@ attempt count stays at 1440.
 ### Relationship to `TIMEOUT_LEDGERS`
 
 `TIMEOUT_LEDGERS` is **120 960 ledgers (≈ 7 days at 5 s/ledger)**
-(`contracts/escrow/src/lib.rs:98`). It is the on-chain safety net: if the oracle never submits a
-result within that window, either player can call `claim_timeout` to recover their stake.
+(defined in `contracts/smile4money-common/src/constants.rs`, re-exported by
+`contracts/escrow/src/constants.rs`). It is the on-chain safety net: if the oracle never
+submits a result within that window, either player can call `claim_timeout` to recover their
+stake.
 
 The polling service is designed so that the active-monitoring window sits **well inside** the
 on-chain timeout:
