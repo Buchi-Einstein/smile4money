@@ -180,6 +180,112 @@ VITE_STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 
 These values are used by the off-chain oracle service and the frontend.
 
+## Mainnet Prerequisites
+
+Before you touch `deploy_mainnet.sh`, verify every item below. Mainnet transactions are irreversible and mistakes cost real XLM.
+
+### Funded deployer account
+
+A Stellar account must exist on the **Public Network** and hold enough XLM to cover:
+
+| Cost item | Approximate XLM |
+|---|---|
+| Minimum account reserve | 1 XLM |
+| Each contract deploy (upload + create) | 2–4 XLM |
+| Each contract initialization invocation | 0.01–0.1 XLM |
+| Comfortable operational buffer | 5 XLM |
+| **Recommended minimum balance** | **20 XLM** |
+
+Stellar's base reserve is currently **0.5 XLM per entry** (subject to validator vote). Always check the current reserve before deploying: [Stellar account minimums](https://developers.stellar.org/docs/learn/fundamentals/stellar-data-structures/accounts#minimum-balance).
+
+Fees are non-refundable even if the transaction fails. Fund the deployer account before running any deploy command:
+
+```bash
+# Confirm the account is funded on mainnet
+stellar account show \
+  --account "$(stellar keys address deployer)" \
+  --network mainnet \
+  --rpc-url https://soroban-mainnet.stellar.org
+```
+
+Unlike testnet there is **no Friendbot** on mainnet. You must transfer XLM from a funded exchange or wallet.
+
+### Contract size limits
+
+Soroban enforces a hard limit on uploaded WASM binary size. As of Stellar Protocol 21 the limit is **128 KB** per contract WASM. Binaries that exceed this limit are rejected at upload time.
+
+Check the size of your built artifacts before deploying:
+
+```bash
+# Build in release mode with size optimisations
+cargo build --target wasm32-unknown-unknown --release
+
+# Inspect artifact sizes
+wc -c target/wasm32-unknown-unknown/release/escrow.wasm \
+       target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+If a binary is close to or over the limit, add the following profile settings to `Cargo.toml`:
+
+```toml
+[profile.release]
+opt-level = "z"      # optimise for size
+lto = true           # link-time optimisation
+codegen-units = 1    # single codegen unit for better dead-code elimination
+strip = true         # strip debug symbols
+```
+
+Refer to the official Soroban contract size guidance: [Soroban contract best practices — binary size](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet).
+
+### Audit and code review requirements
+
+Financial contracts on mainnet **must** be reviewed before deployment. The following steps are required:
+
+1. **Dependency audit** — run `cargo audit` against the [RustSec advisory database](https://rustsec.org/) and resolve every high/critical advisory:
+   ```bash
+   cargo install cargo-audit   # first-time setup
+   cargo audit
+   ```
+
+2. **Static analysis** — the contract code must pass Clippy with no warnings:
+   ```bash
+   cargo clippy --target wasm32-unknown-unknown -- -D warnings
+   ```
+
+3. **Test suite** — all unit and integration tests must pass on the exact commit being deployed:
+   ```bash
+   cargo test
+   ```
+
+4. **Peer review** — the commit to be deployed must have at least one approval from a team member who did not author the changes being deployed. Use the pull-request process documented in [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+5. **Testnet soak** — the contracts must have been running on testnet under representative load for at least one full test cycle before mainnet promotion. Document the testnet contract IDs and the duration of the soak in the deployment PR description.
+
+6. **Third-party audit (recommended for production value > $10k)** — engage a Soroban-familiar security firm to audit the contract logic. Retain the audit report and link it from the deployment PR.
+
+### Testnet vs. mainnet differences at a glance
+
+| | Testnet | Mainnet |
+|---|---|---|
+| Network passphrase | `Test SDF Network ; September 2015` | `Public Global Stellar Network ; September 2015` |
+| RPC URL | `https://soroban-testnet.stellar.org` | `https://soroban-mainnet.stellar.org` |
+| Horizon URL | `https://horizon-testnet.stellar.org` | `https://horizon.stellar.org` |
+| Deploy script | `./scripts/deploy_testnet.sh` | `./scripts/deploy_mainnet.sh` |
+| Account funding | Friendbot (`https://friendbot.stellar.org`) | Real XLM transfer required |
+| Transactions reversible | No (but no real value) | **No — irreversible and real value** |
+| Confirmation prompt | None | Requires typing `yes` |
+| `.env` `STELLAR_NETWORK` value | `testnet` | `mainnet` |
+
+### Stellar mainnet reference links
+
+- [Stellar mainnet RPC & Horizon endpoints](https://developers.stellar.org/docs/data/rpc/rpc-providers)
+- [Soroban deployment overview](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet)
+- [Account minimums & reserves](https://developers.stellar.org/docs/learn/fundamentals/stellar-data-structures/accounts#minimum-balance)
+- [Stellar CLI reference](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
+- [Network status & incidents](https://status.stellar.org/)
+
+---
+
 ## Mainnet Deployment
 
 Mainnet deployment follows the same steps but with additional precautions because transactions are irreversible and consume real XLM.
