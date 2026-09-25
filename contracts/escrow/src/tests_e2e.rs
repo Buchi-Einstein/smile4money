@@ -769,9 +769,9 @@ fn test_e2e_override_result_then_finalize_payout_to_player2() {
     assert_eq!(token_client.balance(&player2), p2_after_deposit);
 
     // ── Step 4: Advance ledger past the dispute window ───────────────────────
-    // DISPUTE_WINDOW_LEDGERS = 17_280; advance by 17_281 to clear the boundary.
+    // Advance by DISPUTE_WINDOW_LEDGERS + 1 to clear the boundary.
     let current = env.ledger().sequence();
-    env.ledger().set_sequence_number(current + 17_281);
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
 
     // ── Step 5: Finalize result — payout goes to Player2 ────────────────────
     client.finalize_result(&match_id, &player1);
@@ -848,7 +848,7 @@ fn test_e2e_override_draw_to_player1_wins() {
 
     // Advance past dispute window and finalize
     let current = env.ledger().sequence();
-    env.ledger().set_sequence_number(current + 17_281);
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
     client.finalize_result(&match_id, &player1);
 
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
@@ -881,7 +881,7 @@ fn test_e2e_override_result_rejected_after_window_expires() {
 
     // Advance past the dispute window
     let current = env.ledger().sequence();
-    env.ledger().set_sequence_number(current + 17_281);
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
 
     // override_result must now be rejected
     assert_eq!(

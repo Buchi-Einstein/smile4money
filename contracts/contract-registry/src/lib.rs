@@ -1,5 +1,6 @@
 #![no_std]
 
+use smile4money_common::constants::MATCH_TTL_LEDGERS;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
 #[contracterror]
@@ -44,10 +45,12 @@ pub struct ContractRegistry;
 const REGISTRATION_TTL_LEDGERS: u32 = 100_000;
 const REGISTRATION_TTL_BUMP: u32 = 50_000;
 
-/// Instance-storage TTL threshold.
-const INSTANCE_LIFETIME_THRESHOLD: u32 = 518_400;
-/// Instance-storage TTL bump amount.
-const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
+/// Instance-storage TTL threshold (~30 days at 5 s/ledger).
+/// Shared with the escrow contract so both contracts' instance entries
+/// expire together — see `smile4money_common::constants::MATCH_TTL_LEDGERS`.
+const INSTANCE_LIFETIME_THRESHOLD: u32 = MATCH_TTL_LEDGERS;
+/// Instance-storage TTL bump amount (same 30-day window as the threshold).
+const INSTANCE_BUMP_AMOUNT: u32 = MATCH_TTL_LEDGERS;
 
 #[contractimpl]
 impl ContractRegistry {
