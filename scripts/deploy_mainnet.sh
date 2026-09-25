@@ -72,7 +72,6 @@ CONTRACT_ESCROW=$(stellar contract deploy \
   --network "$NETWORK" \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$NETWORK_PASSPHRASE")
-echo "Escrow contract: $CONTRACT_ESCROW"
 
 # Deploy oracle contract
 echo "Deploying oracle contract..."
@@ -82,7 +81,6 @@ CONTRACT_ORACLE=$(stellar contract deploy \
   --network "$NETWORK" \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$NETWORK_PASSPHRASE")
-echo "Oracle contract: $CONTRACT_ORACLE"
 
 # Initialize oracle contract (admin = deployer)
 echo "Initializing oracle contract..."
@@ -169,7 +167,4 @@ if grep -q "^VITE_STELLAR_RPC_URL=" "$ENV_FILE"; then
 fi
 
 echo ""
-echo "Mainnet deployment complete."
-echo "  Escrow:  $CONTRACT_ESCROW"
-echo "  Oracle:  $CONTRACT_ORACLE"
-echo "Contract IDs written to $ENV_FILE"
+echo "Mainnet deployment complete. Contract IDs written to $ENV_FILE"
