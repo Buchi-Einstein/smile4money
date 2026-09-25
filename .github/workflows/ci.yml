@@ -239,6 +239,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check bundle size budget
+        run: npm run check:bundle-size
+
       - name: Run tests with coverage
         run: vitest run --coverage
 
