@@ -396,6 +396,143 @@ Additionally:
 - [ ] Run a smoke test: create a test match, deposit stake, and cancel it to verify the full flow.
 - [ ] Update the frontend configuration with the new mainnet contract IDs and network.
 
+## Rollback Procedure (Mainnet)
+
+Soroban contract IDs are immutable. A rollback therefore means deploying the previously
+approved WASM again as new contract instances and switching clients to those new IDs; it does
+not replace the faulty instances or restore their storage. Do not start this procedure until the
+previous release's WASM artifacts, commit, SHA-256 hashes, contract IDs, and initialization
+parameters have been recovered from the deployment record.
+
+### 1. Declare the incident and freeze writes
+
+1. Pause the affected escrow contract using the procedure in [the incident runbook](runbook.md).
+2. Stop the oracle worker and frontend writes so no new match or result transactions are submitted.
+3. Preserve logs, transaction hashes, the current `deployments/mainnet.json`, and a copy of `.env`.
+4. Post an incident notice in the status channel and any user-facing support channel:
+
+   ```text
+   [INCIDENT] Mainnet rollback started at <UTC time>.
+   Affected release: <commit/hash>
+   Impact: new wagers and result submissions are temporarily paused.
+   Funds already recorded on-chain remain on-chain; do not submit duplicate deposits.
+   Next update: <time or cadence>
+   ```
+
+   Update the notice when the rollback is complete, include the replacement contract IDs, and
+   explicitly tell users when creating matches and submitting results is safe again. Keep the
+   incident notice and final resolution available for users who were offline during the event.
+
+### 2. Recover and verify the previous WASM
+
+Download the `wasm-<commit-sha>` CI artifact for the last approved commit, or build that exact
+commit with the pinned reproducible-build image. Verify both hashes before spending mainnet XLM:
+
+```bash
+git show <approved-commit>:Cargo.toml >/dev/null
+unzip wasm-<approved-commit>.zip -d rollback-wasm
+sha256sum rollback-wasm/*.wasm
+```
+
+Compare the result with the hashes recorded for that release. If an artifact or hash is missing,
+stop and investigate; never roll back using an unverified local build.
+
+### 3. Deploy new instances from the previous WASM
+
+The normal deployment script builds the current checkout, so do not run it for a rollback unless
+the checkout has first been pinned to the approved commit. From that clean checkout, run the
+script after confirming its mainnet prompt, or use the equivalent commands below when the
+artifact has been independently verified:
+
+```bash
+MAINNET_RPC="https://soroban-mainnet.stellar.org"
+MAINNET_PASSPHRASE="Public Global Stellar Network ; September 2015"
+DEPLOYER="deployer"
+ADMIN="<admin-address>"
+
+ROLLBACK_ORACLE=$(stellar contract deploy \
+  --wasm rollback-wasm/oracle.wasm --source "$DEPLOYER" --network mainnet \
+  --rpc-url "$MAINNET_RPC" --network-passphrase "$MAINNET_PASSPHRASE")
+
+stellar contract invoke --id "$ROLLBACK_ORACLE" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- initialize --admin "$ADMIN"
+
+ROLLBACK_ESCROW=$(stellar contract deploy \
+  --wasm rollback-wasm/escrow.wasm --source "$DEPLOYER" --network mainnet \
+  --rpc-url "$MAINNET_RPC" --network-passphrase "$MAINNET_PASSPHRASE")
+
+stellar contract invoke --id "$ROLLBACK_ESCROW" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- initialize \
+  --oracle "$ROLLBACK_ORACLE" --admin "$ADMIN"
+```
+
+Fund the replacement escrow with the same 1.5 XLM reserve buffer used by the deployment
+scripts, then run the [WASM hash check](#verify-deployment--wasm-hash-check) against both new
+IDs. Existing matches and balances are not migrated by this procedure. Reconcile or drain any
+affected state according to the incident plan before directing users to the replacement.
+
+### 4. Update the registry and configuration
+
+Back up the current configuration, then update the `CONTRACT_ESCROW` and `CONTRACT_ORACLE`
+values to the replacement IDs and record them in `deployments/mainnet.json`. If the registry is
+deployed, use its admin identity to remove and re-register the affected service entries, or use
+`update_contract` for an existing entry when the registry integration supports that operation:
+
+```bash
+REGISTRY_ID="<contract-registry-id>"
+
+stellar contract invoke --id "$REGISTRY_ID" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- deregister_contract \
+  --caller "$ADMIN" --contract_id escrow
+stellar contract invoke --id "$REGISTRY_ID" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- register_contract \
+  --caller "$ADMIN" --contract_id escrow
+```
+
+Repeat the two calls with `oracle` as the service symbol. The current registry contract stores
+service symbols, not Stellar contract addresses, and `update_contract` only refreshes the
+existing entry. Therefore the registry integration or its backing configuration must also be
+updated with `ROLLBACK_ESCROW` and `ROLLBACK_ORACLE`; verify the values returned to clients
+before resuming traffic. Do not deregister an entry until the replacement configuration is ready.
+
+### 5. Verify, resume, and communicate
+
+- Inspect both replacement contracts and compare their WASM hashes with the approved release.
+- Verify the registry/configuration resolves to the replacement IDs.
+- Run a small end-to-end smoke test, then restart the oracle worker and frontend with the updated
+  configuration.
+- Unpause the replacement escrow only after the smoke test succeeds.
+- Post the final user notice with the UTC completion time, replacement IDs, resolved impact, and
+  any action users must take. Keep the faulty IDs blocked from new traffic and retain the full
+  incident timeline.
+
+### Testnet rollback rehearsal
+
+Run this rehearsal before every mainnet release using two successive testnet deployments. Save
+the old and replacement IDs, transaction hashes, WASM hashes, registry query output, and the
+user-notification timestamps in the release record. A successful rehearsal must show:
+
+| Check | Result to record |
+| --- | --- |
+| Previous release WASM hashes match the downloaded artifacts | Pass / hash values |
+| Replacement oracle and escrow initialize with the expected admin and oracle | Pass / transaction hashes |
+| Replacement escrow reserve is funded and both contracts respond to read-only calls | Pass / IDs |
+| Registry/configuration resolves to the replacement IDs after the update | Pass / query output |
+| Pause, user notice, resume, and final notice were completed in order | Pass / UTC timestamps |
+
+The repository-level registry authorization and update behavior can be checked with:
+
+```bash
+cargo test -p contract-registry
+```
+
+Do not mark the rehearsal complete from this unit test alone: the release record must contain the
+actual testnet transaction hashes and query results from the commands above.
+
 ## Verify Deployment — WASM Hash Check
 
 After deploying to either testnet or mainnet, confirm that the on-chain bytecode matches the
