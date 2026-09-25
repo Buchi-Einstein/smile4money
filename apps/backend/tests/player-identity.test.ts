@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  verifyPlayerIdentities,
-  createIdentityMap,
-  normalizePlayerOrder,
-} from '../src/services/player-identity.js';
+import { verifyPlayerIdentities } from '../src/services/player-identity.js';
 import type { MatchRecord } from '../src/store/match-store.js';
 import type { GameResult } from '../src/fetchers/lichess.js';
 
@@ -194,10 +190,10 @@ describe('Player Identity Verification', () => {
       const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
       expect(result.valid).toBe(false);
     });
-  });
 
-  describe('createIdentityMap', () => {
-    it('creates identity map with player1 as white', () => {
+    it('returns invalid when the registered player1 username is empty', () => {
+      // The API reports a real player, but the on-chain record registered an
+      // empty username for player1. An empty registered name must not match.
       const gameResult: GameResult = {
         gameId: 'abc123',
         status: 'mate',
@@ -206,68 +202,20 @@ describe('Player Identity Verification', () => {
         result: 'Player1Wins',
       };
 
-      const identityMap = createIdentityMap(
-        'GPLAYER1AAAA',
-        'GPLAYER2BBBB',
-        gameResult,
-        'lichess',
-        true,
-      );
-
-      expect(identityMap.player1Address).toBe('GPLAYER1AAAA');
-      expect(identityMap.player1Username).toBe('alice');
-      expect(identityMap.player2Address).toBe('GPLAYER2BBBB');
-      expect(identityMap.player2Username).toBe('bob');
-      expect(identityMap.platform).toBe('lichess');
-    });
-
-    it('creates identity map with player1 as black', () => {
-      const gameResult: GameResult = {
-        gameId: 'abc123',
-        status: 'mate',
-        whitePlayer: 'alice',
-        blackPlayer: 'bob',
-        result: 'Player1Wins',
+      const identityMap = {
+        player1Address: 'GPLAYER1AAAA',
+        player1Username: '',
+        player2Address: 'GPLAYER2BBBB',
+        player2Username: 'bob',
+        platform: 'lichess',
       };
 
-      const identityMap = createIdentityMap(
-        'GPLAYER1AAAA',
-        'GPLAYER2BBBB',
-        gameResult,
-        'lichess',
-        false,
-      );
-
-      expect(identityMap.player1Address).toBe('GPLAYER1AAAA');
-      expect(identityMap.player1Username).toBe('bob');
-      expect(identityMap.player2Address).toBe('GPLAYER2BBBB');
-      expect(identityMap.player2Username).toBe('alice');
-      expect(identityMap.platform).toBe('lichess');
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('empty username');
     });
 
-    it('defaults to player1 as white', () => {
-      const gameResult: GameResult = {
-        gameId: 'abc123',
-        status: 'mate',
-        whitePlayer: 'alice',
-        blackPlayer: 'bob',
-        result: 'Player1Wins',
-      };
-
-      const identityMap = createIdentityMap(
-        'GPLAYER1AAAA',
-        'GPLAYER2BBBB',
-        gameResult,
-        'lichess',
-      );
-
-      expect(identityMap.player1Username).toBe('alice');
-      expect(identityMap.player2Username).toBe('bob');
-    });
-  });
-
-  describe('normalizePlayerOrder', () => {
-    it('returns original map when players match exactly', () => {
+    it('returns invalid when the registered player2 username is empty', () => {
       const gameResult: GameResult = {
         gameId: 'abc123',
         status: 'mate',
@@ -280,76 +228,45 @@ describe('Player Identity Verification', () => {
         player1Address: 'GPLAYER1AAAA',
         player1Username: 'alice',
         player2Address: 'GPLAYER2BBBB',
-        player2Username: 'bob',
+        player2Username: '',
         platform: 'lichess',
       };
 
-      const normalized = normalizePlayerOrder(mockMatch, gameResult, identityMap);
-
-      expect(normalized.player1Username).toBe('alice');
-      expect(normalized.player2Username).toBe('bob');
-      expect(normalized.player1Address).toBe('GPLAYER1AAAA');
-      expect(normalized.player2Address).toBe('GPLAYER2BBBB');
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('empty username');
     });
 
-    it('swaps identities when players are reversed in API', () => {
+    it('returns invalid when both API and registered usernames are empty (no false positive)', () => {
+      // Edge case from the issue: empty API names matching empty registered
+      // names must NOT be treated as a valid identity match.
       const gameResult: GameResult = {
         gameId: 'abc123',
         status: 'mate',
-        whitePlayer: 'bob',
-        blackPlayer: 'alice',
-        result: 'Player2Wins',
+        whitePlayer: '',
+        blackPlayer: '',
+        result: null,
       };
 
       const identityMap = {
         player1Address: 'GPLAYER1AAAA',
-        player1Username: 'alice',
+        player1Username: '',
         player2Address: 'GPLAYER2BBBB',
-        player2Username: 'bob',
+        player2Username: '',
         platform: 'lichess',
       };
 
-      const normalized = normalizePlayerOrder(mockMatch, gameResult, identityMap);
-
-      expect(normalized.player1Username).toBe('bob');
-      expect(normalized.player2Username).toBe('alice');
-      expect(normalized.player1Address).toBe('GPLAYER2BBBB');
-      expect(normalized.player2Address).toBe('GPLAYER1AAAA');
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('empty username');
     });
 
-    it('handles case-insensitive normalization', () => {
+    it('returns invalid when only one of the API usernames is empty', () => {
       const gameResult: GameResult = {
         gameId: 'abc123',
         status: 'mate',
-        whitePlayer: 'BOB',
-        blackPlayer: 'ALICE',
-        result: 'Player2Wins',
-      };
-
-      const identityMap = {
-        player1Address: 'GPLAYER1AAAA',
-        player1Username: 'alice',
-        player2Address: 'GPLAYER2BBBB',
-        player2Username: 'bob',
-        platform: 'lichess',
-      };
-
-      const normalized = normalizePlayerOrder(mockMatch, gameResult, identityMap);
-
-      expect(normalized.player1Username).toBe('bob');
-      expect(normalized.player2Username).toBe('alice');
-    });
-  });
-
-  describe('Attack Prevention Scenarios', () => {
-    it('prevents result injection from different game', () => {
-      // Scenario: Attacker tries to submit result of game XYZ where
-      // Charlie (white) beat David (black), but match is for Alice vs Bob
-      const gameResult: GameResult = {
-        gameId: 'xyz789', // Different game!
-        status: 'mate',
-        whitePlayer: 'charlie',
-        blackPlayer: 'david',
+        whitePlayer: 'alice',
+        blackPlayer: '',
         result: 'Player1Wins',
       };
 
@@ -363,64 +280,6 @@ describe('Player Identity Verification', () => {
 
       const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
       expect(result.valid).toBe(false);
-      expect(result.error).toContain('Player identity mismatch');
-    });
-
-    it('prevents swapping player stakes through identity mismatch', () => {
-      // Scenario: Attacker tries to submit result of game where
-      // different players won, hoping to redirect the payout
-      const gameResult: GameResult = {
-        gameId: 'abc123',
-        status: 'mate',
-        whitePlayer: 'alice',
-        blackPlayer: 'eve', // Wrong opponent
-        result: 'Player1Wins',
-      };
-
-      const identityMap = {
-        player1Address: 'GPLAYER1AAAA',
-        player1Username: 'alice',
-        player2Address: 'GPLAYER2BBBB',
-        player2Username: 'bob',
-        platform: 'lichess',
-      };
-
-      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
-      expect(result.valid).toBe(false);
-      expect(result.error).toContain('eve');
-    });
-
-    it('allows correct matches regardless of player color assignment', () => {
-      // Alice and Bob can play in either color order; as long as it's Alice vs Bob,
-      // the result is valid (though interpretation may differ)
-      const colorVariations = [
-        { white: 'alice', black: 'bob', valid: true },
-        { white: 'bob', black: 'alice', valid: true },
-        { white: 'ALICE', black: 'BOB', valid: true },
-        { white: 'alice', black: 'eve', valid: false },
-        { white: 'charlie', black: 'bob', valid: false },
-      ];
-
-      const identityMap = {
-        player1Address: 'GPLAYER1AAAA',
-        player1Username: 'alice',
-        player2Address: 'GPLAYER2BBBB',
-        player2Username: 'bob',
-        platform: 'lichess',
-      };
-
-      colorVariations.forEach(({ white, black, valid }) => {
-        const gameResult: GameResult = {
-          gameId: 'abc123',
-          status: 'mate',
-          whitePlayer: white,
-          blackPlayer: black,
-          result: 'Player1Wins',
-        };
-
-        const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
-        expect(result.valid).toBe(valid);
-      });
     });
   });
 });

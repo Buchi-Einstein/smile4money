@@ -91,6 +91,23 @@ describe('POST /api/matches', () => {
     expect(response.status).toBe(400);
   });
 
+  it('returns 400 when player2 matches the JWT address regardless of case', async () => {
+    const player1Address = 'GPLAYER1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const response = await request(app)
+      .post('/api/matches')
+      .set('Authorization', `Bearer ${makeToken(player1Address.toLowerCase())}`)
+      .send({
+        player2: player1Address,
+        stakeAmount: 100,
+        token: 'XLM',
+        gameId: 'lichess-game-abc123',
+        platform: 'lichess',
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('player1 and player2 must be different addresses');
+  });
+
   it('returns 400 when stakeAmount is missing', async () => {
     mockLichessGameFound('lichess-game-abc123');
     const response = await request(app)
@@ -107,6 +124,16 @@ describe('POST /api/matches', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', stakeAmount: 0, token: 'XLM', gameId: 'lichess-game-abc123', platform: 'lichess' });
     expect(response.status).toBe(400);
+  });
+
+  it('returns 400 when stakeAmount is not a whole number', async () => {
+    mockLichessGameFound('lichess-game-abc123');
+    const response = await request(app)
+      .post('/api/matches')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', stakeAmount: 1.5, token: 'XLM', gameId: 'lichess-game-abc123', platform: 'lichess' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('stakeAmount must be a whole number of stroops');
   });
 
   it('returns 400 when gameId is missing', async () => {

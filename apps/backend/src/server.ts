@@ -2,24 +2,79 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { app } from './app.js';
-import { initializeQueue, closeQueue, startRetryWorker, listDlqEntries } from './queue.js';
+import { initializeQueue, closeQueue, startRetryWorker, listDlqEntries, writeToDlq, type DlqEntry } from './queue.js';
+import { initializeMatchStore } from './store/index.js';
+import { PollingJobStore, PollingWorker } from './services/polling.js';
+import ChessPlatformPoller from './services/game-poller.js';
+import { loadRetryConfig, submitWithIdempotence, type OracleSubmission } from './services/oracle-submit.js';
 import logger from './logger.js';
 
 const port = Number(process.env.PORT || 4000);
 
 /**
- * Oracle retry handler for reprocessing DLQ entries.
- * This is a placeholder that can be replaced with actual oracle submission logic.
+ * Placeholder for the actual Stellar contract submission handler.
+ * This would be wired up with the Stellar SDK and oracle keypair.
+ * For now, it throws to indicate this is not yet implemented.
  */
-async function retryOracleSubmission(entry: any): Promise<void> {
-  // Implementation depends on how the oracle submits results to the contract.
-  // For now, this is a placeholder. In production, this would:
-  // 1. Reconstruct the original submission request from entry.payload
-  // 2. Call the Stellar RPC to submit the result
-  // 3. Throw if submission fails
+async function submitOracleResultToContract(submission: OracleSubmission): Promise<void> {
+  // TODO: Implement actual Stellar contract submission
+  // This should:
+  // 1. Create a transaction builder
+  // 2. Add the oracle contract's submit_result operation
+  // 3. Sign with the oracle keypair
+  // 4. Submit to Soroban RPC
+  throw new Error('Oracle contract submission not yet implemented. Set up Stellar SDK and oracle keypair.');
+}
+
+/**
+ * Placeholder for checking if a result already exists on-chain.
+ * Used for idempotent submission (skip if already submitted).
+ */
+async function checkResultExistsOnChain(matchId: number): Promise<boolean> {
+  // TODO: Implement existence check via Stellar RPC
+  // This should query the oracle contract to see if a result exists for this matchId
+  return false; // For now, assume it doesn't exist so retries will attempt submission
+}
+
+/**
+ * Oracle retry handler for reprocessing DLQ entries.
+ * 
+ * Reconstructs the original OracleSubmission from the DLQ entry payload and attempts
+ * to submit it to the blockchain with idempotence checks. If submission fails, the error
+ * is thrown so the entry remains in the DLQ for the next retry cycle.
+ */
+async function retryOracleSubmission(entry: DlqEntry): Promise<void> {
+  const submission = entry.payload as OracleSubmission;
   
-  logger.debug({ dlqId: entry.id }, 'Retrying oracle submission');
-  // Placeholder: successful retry (would be replaced with actual logic)
+  if (!submission || typeof submission !== 'object' || !('matchId' in submission)) {
+    throw new Error(`Invalid DLQ entry payload: expected OracleSubmission, got ${typeof entry.payload}`);
+  }
+
+  logger.debug(
+    { dlqId: entry.id, matchId: submission.matchId, gameId: submission.gameId },
+    'oracle_dlq: retrying oracle submission'
+  );
+
+  const config = loadRetryConfig();
+  
+  try {
+    // Attempt submission with idempotence check
+    // If the result already exists on-chain, this returns cleanly
+    // If submission fails, the error is thrown and propagates to the caller
+    await submitWithIdempotence(
+      submission,
+      submitOracleResultToContract,
+      checkResultExistsOnChain,
+      config
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { dlqId: entry.id, matchId: submission.matchId, error: message },
+      'oracle_dlq: submission failed, entry will remain in DLQ'
+    );
+    throw err; // Re-throw so the entry stays in the DLQ
+  }
 }
 
 async function main() {
@@ -27,6 +82,10 @@ async function main() {
     // Initialize the persistent queue store
     await initializeQueue();
     logger.info('Queue store initialized');
+
+    // Initialize the persistent match store (SQLite-backed)
+    await initializeMatchStore();
+    logger.info('Match store initialized');
 
     // Load any pending jobs from the queue on startup
     const pendingEntries = await listDlqEntries();
@@ -37,6 +96,46 @@ async function main() {
 
     // Start the retry worker
     const stopRetryWorker = startRetryWorker(retryOracleSubmission, 60_000);
+
+    // Set up the polling worker with DLQ wiring for max-attempts exceeded
+    const pollingStore = new PollingJobStore();
+    const gamePoller = new ChessPlatformPoller();
+    const pollingWorker = new PollingWorker(pollingStore, gamePoller, {
+      pollingIntervalMs: Number(process.env.POLLING_INTERVAL_MS ?? 30_000),
+      maxPollingAttempts: Number(process.env.MAX_POLLING_ATTEMPTS ?? 1440),
+      backoffMultiplier: Number(process.env.POLLING_BACKOFF_MULTIPLIER ?? 1.0),
+      onGameCompleted: async (job, result) => {
+        logger.info(
+          {
+            match_id: job.matchId,
+            game_id: job.gameId,
+            platform: job.platform,
+            result,
+            attempts: job.pollingAttempt,
+          },
+          'polling_job_game_completed_submitting_to_oracle',
+        );
+        // TODO: invoke the oracle submission pipeline here
+        // e.g. await submitToOracle({ matchId: job.matchId, gameId: job.gameId, result })
+      },
+      onMaxAttemptsExceeded: async (job, reason) => {
+        logger.error(
+          {
+            match_id: job.matchId,
+            game_id: job.gameId,
+            platform: job.platform,
+            attempts: job.pollingAttempt,
+            reason,
+          },
+          'polling_job_max_attempts_exceeded_writing_to_dlq',
+        );
+        await writeToDlq(
+          { job },
+          reason ?? 'max polling attempts exceeded',
+        );
+      },
+    });
+    const stopPollingWorker = pollingWorker.start();
 
     // Start the Express server
     const server = app.listen(port, () => {
@@ -49,6 +148,7 @@ async function main() {
     // Graceful shutdown
     const shutdown = async () => {
       logger.info('Shutting down gracefully...');
+      stopPollingWorker();
       stopRetryWorker();
       await closeQueue();
       server.close(() => {

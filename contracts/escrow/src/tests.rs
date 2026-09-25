@@ -59,6 +59,27 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address, Addres
 }
 
 #[test]
+fn test_initialize_twice_returns_already_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let oracle = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let safe_address = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // First initialize should succeed
+    let res = client.try_initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
+    assert!(res.is_ok());
+
+    // Second initialize should return AlreadyInitialized rather than panic
+    let res2 = client.try_initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
+    assert!(matches!(res2, Err(Ok(Error::AlreadyInitialized))));
+}
+
+#[test]
 fn test_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -507,7 +528,7 @@ fn test_cancel_active_match_unilateral_fails() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
     asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     let expiration = env.ledger().sequence() + 1000000;
@@ -1411,6 +1432,52 @@ fn test_transfer_admin_rejects_zero_address() {
     .unwrap();
 
     assert_eq!(client.try_transfer_admin(&admin, &zero_admin), Err(Ok(Error::InvalidAdmin)));
+}
+
+#[test]
+fn test_transfer_admin_succeeds_and_rotates_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let new_admin = Address::generate(&env);
+
+    // Successful rotation
+    assert!(client.try_transfer_admin(&admin, &new_admin).is_ok());
+
+    // Old admin can no longer perform admin rotation
+    let another = Address::generate(&env);
+    assert_eq!(
+        client.try_transfer_admin(&admin, &another),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    // New admin can now rotate again
+    assert!(client.try_transfer_admin(&new_admin, &another).is_ok());
+}
+
+#[test]
+fn test_transfer_admin_self_transfer_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // new_admin == current_admin must be rejected
+    assert_eq!(
+        client.try_transfer_admin(&admin, &admin),
+        Err(Ok(Error::InvalidAdmin))
+    );
+}
+
+#[test]
+fn test_transfer_admin_unauthorized_caller_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let impostor = Address::generate(&env);
+
+    // A non-admin caller must be rejected
+    assert_eq!(
+        client.try_transfer_admin(&impostor, &admin),
+        Err(Ok(Error::Unauthorized))
+    );
 }
 
 #[test]
@@ -3132,6 +3199,54 @@ fn test_list_matches_after_limit() {
     assert_eq!(result.get(9), 15);
 }
 
+/// Issue #68: get_game_id_owner must return the match_id that registered a
+/// given game_id, and None for unregistered game_ids.
+#[test]
+fn test_get_game_id_owner_returns_match_id_and_none_for_unknown() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_a = String::from_str(&env, "game_owner_a");
+    let game_b = String::from_str(&env, "game_owner_b");
+    let game_unknown = String::from_str(&env, "game_owner_unknown");
+
+    let id_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_a,
+        &Platform::Lichess,
+    );
+    let id_b = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_b,
+        &Platform::Lichess,
+    );
+
+    // Registered game_ids return their owning match_id.
+    assert_eq!(
+        client.get_game_id_owner(&game_a),
+        Some(id_a),
+        "registered game_id must return its match_id"
+    );
+    assert_eq!(
+        client.get_game_id_owner(&game_b),
+        Some(id_b),
+        "registered game_id must return its match_id"
+    );
+
+    // Unregistered game_id returns None.
+    assert_eq!(
+        client.get_game_id_owner(&game_unknown),
+        None,
+        "unregistered game_id must return None"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Issue #1122 — Property-based tests for state machine transition invariants
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3200,6 +3315,35 @@ fn test_claim_timeout_player1_succeeds_after_timeout() {
     assert_eq!(token_client.balance(&player2), 1000);
 }
 
+#[test]
+fn test_claim_timeout_boundary() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_boundary"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // The match becomes Active at the ledger sequence at deposit time.
+    let activated = env.ledger().sequence();
+    let timeout = crate::TIMEOUT_LEDGERS;
+
+    // Immediately before the timeout window: should return TimeoutNotReached
+    env.ledger().set_sequence_number(activated + timeout - 1);
+    assert_eq!(client.try_claim_timeout(&id, &player1), Err(Ok(Error::TimeoutNotReached)));
+
+    // Exactly when timeout becomes valid: claim should succeed
+    env.ledger().set_sequence_number(activated + timeout);
+    assert!(client.try_claim_timeout(&id, &player1).is_ok());
+}
+
 /// claim_timeout must fail with MatchTimedOut (too early) when called before
 /// TIMEOUT_LEDGERS have elapsed.
 #[test]
@@ -3263,8 +3407,8 @@ fn test_transfer_admin_extends_instance_ttl() {
 // Issue #1034 — emergency_drain drain_noop event test
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Issue #1034: when emergency_drain is called on a zero-balance contract,
-/// a drain_noop event must be emitted to preserve the audit trail.
+/// Issue #1034 / #69: when emergency_drain is called on a zero-balance contract,
+/// it must emit a drn_noop event, return Ok(()), and must NOT attempt a transfer.
 #[test]
 fn test_emergency_drain_zero_balance_emits_drain_noop() {
     let env = Env::default();
@@ -3278,18 +3422,31 @@ fn test_emergency_drain_zero_balance_emits_drain_noop() {
     let token_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
+    let token_client = TokenClient::new(&env, &token_addr);
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
+    // Sanity: contract starts with a zero balance
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&safe_address), 0);
+
     // Pause the contract (required by emergency_drain)
     client.pause();
 
-    // Call emergency_drain on an empty contract
-    client.emergency_drain(&admin);
+    // Call emergency_drain on an empty contract — must succeed (no error)
+    assert!(
+        client.try_emergency_drain(&admin).is_ok(),
+        "emergency_drain on zero balance must return Ok(())"
+    );
 
-    // Verify the drain_noop event was emitted
+    // Verify no funds moved: contract and safe_address balances are still zero
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&safe_address), 0);
+
+    // Verify the drain_noop event was emitted (with amount 0) to preserve
+    // the audit trail, rather than a real drain event or zero-amount transfer.
     let events = env.events().all();
     let noop_event = events.iter().find(|(_, t, _)| {
         t.len() == 2
@@ -3302,6 +3459,10 @@ fn test_emergency_drain_zero_balance_emits_drain_noop() {
         noop_event.is_some(),
         "drain_noop event must be emitted when emergency_drain is called on zero balance"
     );
+    let (_, _, data) = noop_event.unwrap();
+    let (amount, _dest, _admin): (i128, Address, Address) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(amount, 0, "drn_noop event amount must be 0");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3796,6 +3957,35 @@ fn test_activated_ledger_some_after_both_deposits() {
 // create_match either succeeds or returns one of the known-valid error codes.
 // The contract should NEVER panic, even with arbitrary inputs.
 
+#[test]
+fn test_create_match_min_stake_boundary() {
+    // Use the same setup helper as the fuzz tests – it returns all needed variables.
+    let (env, contract_id, oracle, admin, _, player1, player2, token) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let min_stake = crate::MIN_STAKE; // Should be 1
+    let game_id = String::from_str(&env, "min_stake_test");
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &min_stake,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    // Assert success – the exact minimum stake must be accepted.
+    assert!(result.is_ok(), "create_match with MIN_STAKE should succeed");
+    let match_id = result.unwrap();
+    assert!(match_id >= 0);
+
+    // Optionally verify the match was stored correctly.
+    let match_data = client.get_match(&match_id).unwrap();
+    assert_eq!(match_data.stake_amount, min_stake);
+    assert_eq!(match_data.state, MatchState::Pending);
+}
+
 #[cfg(test)]
 mod fuzz {
     use super::*;
@@ -4038,4 +4228,79 @@ mod fuzz {
             );
         }
     }
+}
+
+#[test]
+fn test_create_match_max_stake_boundary() {
+    // Use the same setup helper as the fuzz tests.
+    let (env, contract_id, oracle, admin, _, player1, player2, token) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let max_stake = crate::MAX_STAKE; // Should be 10_000_000_000_000
+    let game_id = String::from_str(&env, "max_stake_test");
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &max_stake,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    // Assert success – the exact maximum stake must be accepted.
+    assert!(result.is_ok(), "create_match with MAX_STAKE should succeed");
+    let match_id = result.unwrap();
+    assert!(match_id >= 0);
+
+    // Verify the match was stored correctly.
+    let match_data = client.get_match(&match_id).unwrap();
+    assert_eq!(match_data.stake_amount, max_stake);
+    assert_eq!(match_data.state, MatchState::Pending);
+}
+
+#[test]
+fn test_finalize_result_at_exact_dispute_window_boundary() {
+    let (env, contract_id, oracle, admin, _, player1, player2, token) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let stake = 1000;
+    let game_id = String::from_str(&env, "boundary_test");
+
+    // 1. Create match
+    let match_id = client.try_create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    ).unwrap();
+
+    // 2. Both players deposit
+    client.deposit(&player1, &match_id, &stake).unwrap();
+    client.deposit(&player2, &match_id, &stake).unwrap();
+
+    // 3. Oracle submits result (state → PendingResult)
+    let result = MatchResult::Player1Wins;
+    client.submit_result(&oracle, &match_id, &result, &game_id).unwrap();
+
+    // 4. Get the stored match to read pending_result_ledger
+    let match_data = client.get_match(&match_id).unwrap();
+    let pending_result_ledger = match_data.pending_result_ledger.unwrap(); // unwrap safely
+
+    // 5. Get dispute window from the contract (or use constant)
+    let dispute_window = crate::DISPUTE_WINDOW_LEDGERS; // adjust if needed
+
+    // 6. Advance ledger to exactly pending_result_ledger + dispute_window
+    let boundary_ledger = pending_result_ledger + dispute_window;
+    env.ledger().set_sequence_number(boundary_ledger);
+
+    // 7. Call finalize_result – must be rejected with DisputeWindowActive
+    let result = client.try_finalize_result(&match_id);
+    assert!(
+        matches!(result, Err(Ok(Error::DisputeWindowActive))),
+        "finalize_result at exact boundary should be rejected with DisputeWindowActive, got: {:?}",
+        result
+    );
 }

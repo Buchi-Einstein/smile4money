@@ -450,6 +450,55 @@ loop {
 
 ---
 
+#### `list_matches_after`
+
+Retrieve a paginated list of match IDs using **cursor-based** (keyset) pagination, a more robust alternative to `list_matches`.
+
+**Signature:**
+```rust
+pub fn list_matches_after(env: Env, after_match_id: u64, limit: u32) -> Vec<u64>
+```
+
+**Parameters:**
+- `after_match_id`: Return IDs strictly greater than this value. Use `u64::MAX` to start from the beginning.
+- `limit`: Maximum number of match IDs to return (capped at 100)
+
+**Returns:**
+- `Vec<u64>`: Vector of match IDs greater than `after_match_id`, up to `limit` entries
+
+**Behavior:**
+- Returns IDs in the range `(after_match_id, after_match_id + limit]` (capped at 100 iterations)
+- **Unambiguous end-of-data**: an empty result always means there are no further matches. Unlike offset-based `list_matches`, a sparse ID space cannot produce a false "gap"
+- Cursor reuse is safe: the same cursor remains valid even if the contract state changes between calls
+- If fewer matches exist after the cursor, only the available IDs are returned
+
+**Pagination Example:**
+```rust
+let mut cursor = u64::MAX; // start before all IDs
+loop {
+    let matches = escrow.list_matches_after(&cursor, &100);
+    if matches.is_empty() {
+        break; // Reached the end of data
+    }
+
+    // Process matches...
+    for match_id in &matches {
+        let match_data = escrow.get_match(match_id);
+        println!("Match {}: {:?}", match_id, match_data.state);
+    }
+
+    // Advance the cursor using the last returned ID
+    cursor = matches.get(matches.len() - 1);
+}
+```
+
+**Notes:**
+- Prefer this function over `list_matches` when iterating matches in sparse ID spaces (e.g. many cancelled matches), since it never misses entries
+- Requesting a `limit` greater than 100 does not error; it is silently capped at 100
+- To detect the last page: an empty vector indicates the end of data
+
+---
+
 #### `list_results`
 
 Retrieve a paginated list of oracle results.

@@ -140,6 +140,7 @@ All of the jobs below must pass before a PR can be merged:
 | WASM build | `Build` |
 | environments.toml valid | `Validate environments.toml` |
 | Frontend type-check / lint / tests | `Frontend` |
+| Backend build (type-check) / tests | `Backend` |
 
 ### Required Reviewers
 

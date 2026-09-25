@@ -7,13 +7,17 @@ import jwt, { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
  * If not set, defaults to 'test-secret' for development only.
  * NEVER use default in production.
  */
-const SECRET = process.env.JWT_SECRET || 'test-secret';
+const DEFAULT_SECRET = 'test-secret';
+const SECRET = process.env.JWT_SECRET || DEFAULT_SECRET;
 
-// Check if we're in production without a proper secret
-if (process.env.NODE_ENV === 'production' && SECRET === 'test-secret') {
-  console.warn(
-    'WARNING: JWT_SECRET is not set in production. This is a security vulnerability. ' +
-      'Set JWT_SECRET to a strong random string in your environment variables.',
+// Hard fail at startup in production: a missing or default JWT_SECRET lets
+// anyone forge tokens with the well-known default, so refusing to start is
+// the only safe behavior. The default is only acceptable for local development.
+if (process.env.NODE_ENV === 'production' && SECRET === DEFAULT_SECRET) {
+  throw new Error(
+    'JWT_SECRET is not set (or is set to the known default "test-secret"). ' +
+      'Refusing to start in production. Set JWT_SECRET to a strong, random ' +
+      'string in your environment variables.',
   );
 }
 

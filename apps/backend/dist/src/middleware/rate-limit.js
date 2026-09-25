@@ -88,7 +88,8 @@ export class RateLimitStore {
  * ```
  */
 export function createRateLimitMiddleware(store, options) {
-    const keyExtractor = options?.keyExtractor || ((req) => getClientIp(req));
+    const trustedProxies = options?.trustedProxies || [];
+    const keyExtractor = options?.keyExtractor || ((req) => getClientIp(req, trustedProxies));
     const statusCode = options?.statusCode || 429;
     const message = options?.message || 'Too many requests, please try again later';
     return (req, res, next) => {
@@ -109,13 +110,19 @@ export function createRateLimitMiddleware(store, options) {
 }
 /**
  * Extract the client's IP address from the request.
- * Considers X-Forwarded-For header for proxied requests.
+ *
+ * The X-Forwarded-For header is only honored when the request arrives directly
+ * from a trusted proxy; otherwise a client could spoof the header to cycle
+ * through fake IPs and bypass per-IP rate limiting.
  */
-function getClientIp(req) {
-    const forwarded = req.header('X-Forwarded-For');
-    if (forwarded) {
-        // X-Forwarded-For can be a comma-separated list; take the first IP
-        return forwarded.split(',')[0].trim();
+function getClientIp(req, trustedProxies) {
+    const remoteAddress = req.socket.remoteAddress || 'unknown';
+    if (trustedProxies.includes(remoteAddress)) {
+        const forwarded = req.header('X-Forwarded-For');
+        if (forwarded) {
+            // X-Forwarded-For can be a comma-separated list; take the first IP (the original client)
+            return forwarded.split(',')[0].trim();
+        }
     }
-    return req.socket.remoteAddress || 'unknown';
+    return remoteAddress;
 }

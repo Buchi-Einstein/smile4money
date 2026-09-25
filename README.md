@@ -172,7 +172,34 @@ stellar keys generate deployer --network testnet
 **Initialization**
 
 ```
-initialize(oracle: Address, admin: Address, token: Address)
+initialize(
+    oracle: Address,
+    admin: Address,
+    token: Address,
+    safe_address: Address,
+    dispute_window_ledgers: Option<u32>,
+    timeout_ledgers: Option<u32>
+)
+```
+
+- `oracle` — Address authorized to submit match results.
+- `admin` — Address with administrative privileges (pause/unpause, update oracle, emergency drain).
+- `token` — The SEP-41 token used for stakes (e.g. XLM or USDC).
+- `safe_address` — **Required.** The immutable destination address for `emergency_drain`. Funds are always drained to this address and it cannot be changed after initialization.
+- `dispute_window_ledgers` — Optional dispute window length in ledgers. Uses the contract default if `None`.
+- `timeout_ledgers` — Optional match timeout length in ledgers. Uses the contract default if `None`.
+
+Example:
+
+```rust
+client.initialize(
+    &oracle,
+    &admin,
+    &token,
+    &safe_address,
+    &None,
+    &None,
+);
 ```
 
 **Match Management**

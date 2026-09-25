@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 #### Smart Contract — Escrow
+- `safe_address` parameter in `initialize`: immutable destination for `emergency_drain`, preventing a compromised admin from draining funds to an arbitrary address (#86)
+- Configurable `dispute_window_ledgers` and `timeout_ledgers` in `initialize`: optional parameters that override the contract defaults (~24 hours and ~7 days respectively), enabling per-deployment tuning for testnet, mainnet, or high-stakes contexts (#86)
+- `list_matches_after(after_match_id, limit)` cursor-based pagination: replaces offset pagination with a stable, sparse-ID-safe cursor approach; an empty result unambiguously signals end-of-data (#86)
+- `ESCROW_RESERVE_BUFFER_STROOPS` guard (15 000 000 stroops = 1.5 XLM): every payout now checks that the contract retains at least this balance post-transfer, preventing `transfer` failures that would leave match state inconsistent (#86)
+- `half_fun` first-deposit event `("match", "half_fun")`: emitted exactly once when the first of two players deposits, carrying `(match_id, player_label, stake_amount)` for off-chain observability (#86)
 - `PendingResult` match state for dispute window support (#TBD)
 - `claim_timeout` configuration for dispute window duration (#TBD)
 - `override_result` admin function to correct fraudulent oracle submissions during dispute window (#TBD)
