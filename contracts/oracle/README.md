@@ -363,7 +363,7 @@ These events are consumed by the off-chain oracle service and any indexers monit
 
 | Key | Type | Storage | TTL | Description |
 |-----|------|---------|-----|-------------|
-| `DataKey::Admin` | `Address` | Instance | Contract lifetime | The authorized oracle service address |
+| `DataKey::InstanceState` | `InstanceState` | Instance | Contract lifetime | The authorized oracle service address and total result count, loaded together on submission |
 | `DataKey::Result(match_id)` | `ResultEntry` | Persistent | ~30 days (518,400 ledgers) | Stored result per match |
 
 Persistent entries have their TTL refreshed to 518,400 ledgers on every write to prevent expiry during an active match window.
