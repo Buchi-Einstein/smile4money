@@ -39,9 +39,30 @@ export interface GamePoller {
 }
 
 export interface PollingConfig {
-  pollingIntervalMs: number;
-  maxPollingAttempts: number;
-  backoffMultiplier: number;
+  /** Base polling interval in milliseconds. Defaults to 30 000. */
+  pollingIntervalMs?: number;
+  /** Maximum polling attempts before the job is moved to DLQ. Defaults to 1440 (~12 h at 30 s intervals). */
+  maxPollingAttempts?: number;
+  /** Backoff multiplier applied to the interval on each retry. Defaults to 1.0 (no backoff). */
+  backoffMultiplier?: number;
+
+  /**
+   * Called when a game finishes and a result is available.
+   * Use this to trigger oracle submission.
+   *
+   * @param job    - The polling job that completed
+   * @param result - The game outcome reported by the chess platform
+   */
+  onGameCompleted: (job: PollJob, result: MatchResult) => Promise<void>;
+
+  /**
+   * Called when a polling job exceeds maxPollingAttempts.
+   * Use this to write the job to a dead-letter queue and fire an alert.
+   *
+   * @param job    - The polling job that exhausted all attempts
+   * @param reason - Optional failure reason from the last poll response
+   */
+  onMaxAttemptsExceeded: (job: PollJob, reason?: string) => Promise<void>;
 }
 
 /**
@@ -188,13 +209,13 @@ export class PollingJobStore {
 export class PollingWorker {
   private store: PollingJobStore;
   private poller: GamePoller;
-  private config: PollingConfig;
+  private config: Required<PollingConfig>;
   private timers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(
     store: PollingJobStore,
     poller: GamePoller,
-    config: Partial<PollingConfig> = {},
+    config: PollingConfig,
   ) {
     this.store = store;
     this.poller = poller;
@@ -202,6 +223,8 @@ export class PollingWorker {
       pollingIntervalMs: config.pollingIntervalMs ?? 30_000,
       maxPollingAttempts: config.maxPollingAttempts ?? 1440, // ~12 hours at 30s intervals
       backoffMultiplier: config.backoffMultiplier ?? 1.0, // No backoff by default
+      onGameCompleted: config.onGameCompleted,
+      onMaxAttemptsExceeded: config.onMaxAttemptsExceeded,
     };
   }
 
@@ -321,7 +344,7 @@ export class PollingWorker {
 
       this.timers.set(job.id, timer);
     } else if (status.status === 'completed' && status.result) {
-      // Game completed — remove from polling and trigger submission
+      // Game completed — remove from polling and invoke the completion handler
       logger.info(
         {
           match_id: job.matchId,
@@ -333,8 +356,23 @@ export class PollingWorker {
       );
 
       this.store.completeJob(job.id);
-      // In a real app, here you'd emit an event or call a handler
-      // e.g., this.config.onGameCompleted(job, status.result)
+
+      try {
+        await this.config.onGameCompleted(job, status.result);
+      } catch (callbackErr) {
+        logger.error(
+          {
+            match_id: job.matchId,
+            game_id: job.gameId,
+            result: status.result,
+            error:
+              callbackErr instanceof Error
+                ? callbackErr.message
+                : String(callbackErr),
+          },
+          'polling_job_on_game_completed_callback_failed',
+        );
+      }
     } else if (status.status === 'failed') {
       // Polling failed — check if we should retry or move to DLQ
       if (job.pollingAttempt >= this.config.maxPollingAttempts) {
@@ -350,8 +388,22 @@ export class PollingWorker {
         );
 
         this.store.removeJob(job.id);
-        // In a real app, here you'd move to DLQ
-        // e.g., this.config.onMaxAttemptsExceeded(job, status.reason)
+
+        try {
+          await this.config.onMaxAttemptsExceeded(job, status.reason);
+        } catch (callbackErr) {
+          logger.error(
+            {
+              match_id: job.matchId,
+              game_id: job.gameId,
+              error:
+                callbackErr instanceof Error
+                  ? callbackErr.message
+                  : String(callbackErr),
+            },
+            'polling_job_on_max_attempts_callback_failed',
+          );
+        }
       } else {
         logger.warn(
           {

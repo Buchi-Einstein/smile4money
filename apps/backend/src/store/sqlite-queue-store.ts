@@ -5,10 +5,13 @@
  * Suitable for smaller deployments where MongoDB is not available.
  */
 
-import sqlite3 from 'sqlite3';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import type { DlqEntry, PersistentQueueStore } from './persistent-queue-store.js';
+import sqlite3 from "sqlite3";
+import path from "path";
+import { fileURLToPath } from "url";
+import type {
+  DlqEntry,
+  PersistentQueueStore,
+} from "./persistent-queue-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,12 +21,14 @@ export class SQLiteQueueStore implements PersistentQueueStore {
   private initialized = false;
 
   constructor(dbPath?: string) {
-    this.dbPath = dbPath || path.join(__dirname, '../../data/oracle-queue.db');
+    this.dbPath = dbPath || path.join(__dirname, "../../data/oracle-queue.db");
   }
 
   private getDb(): sqlite3.Database {
     if (!this.db) {
-      throw new Error('SQLiteQueueStore not initialized. Call initialize() first.');
+      throw new Error(
+        "SQLiteQueueStore not initialized. Call initialize() first.",
+      );
     }
     return this.db;
   }
@@ -36,9 +41,16 @@ export class SQLiteQueueStore implements PersistentQueueStore {
           return;
         }
 
-        // Create table if not exists
-        this.db!.run(
-          `
+        // WAL allows readers to continue while writes are in progress.
+        this.db!.run(`PRAGMA journal_mode=WAL`, (err: Error | null) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+
+          // Create table if not exists
+          this.db!.run(
+            `
           CREATE TABLE IF NOT EXISTS oracle_dlq (
             id TEXT PRIMARY KEY NOT NULL,
             payload TEXT NOT NULL,
@@ -49,28 +61,29 @@ export class SQLiteQueueStore implements PersistentQueueStore {
             expireAt INTEGER NOT NULL,
             CONSTRAINT expireAt_check CHECK (expireAt > 0)
           )
-          `,
-          (err: Error | null) => {
-            if (err) {
-              reject(err);
-              return;
-            }
-
-            // Create index for efficient queries and TTL cleanup
-            this.db!.run(
-              `CREATE INDEX IF NOT EXISTS idx_oracle_dlq_expireAt ON oracle_dlq(expireAt)`,
-              (err: Error | null) => {
-                if (err) {
-                  reject(err);
-                  return;
-                }
-
-                this.initialized = true;
-                resolve();
+            `,
+            (err: Error | null) => {
+              if (err) {
+                reject(err);
+                return;
               }
-            );
-          }
-        );
+
+              // Create index for efficient queries and TTL cleanup
+              this.db!.run(
+                `CREATE INDEX IF NOT EXISTS idx_oracle_dlq_expireAt ON oracle_dlq(expireAt)`,
+                (err: Error | null) => {
+                  if (err) {
+                    reject(err);
+                    return;
+                  }
+
+                  this.initialized = true;
+                  resolve();
+                },
+              );
+            },
+          );
+        });
       });
     });
   }
@@ -95,7 +108,7 @@ export class SQLiteQueueStore implements PersistentQueueStore {
         (err: Error | null) => {
           if (err) reject(err);
           else resolve();
-        }
+        },
       );
     });
   }
@@ -131,19 +144,23 @@ export class SQLiteQueueStore implements PersistentQueueStore {
               }));
 
               resolve(entries);
-            }
+            },
           );
-        }
+        },
       );
     });
   }
 
   async remove(id: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.getDb().run(`DELETE FROM oracle_dlq WHERE id = ?`, [id], (err: Error | null) => {
-        if (err) reject(err);
-        else resolve();
-      });
+      this.getDb().run(
+        `DELETE FROM oracle_dlq WHERE id = ?`,
+        [id],
+        (err: Error | null) => {
+          if (err) reject(err);
+          else resolve();
+        },
+      );
     });
   }
 
@@ -153,11 +170,11 @@ export class SQLiteQueueStore implements PersistentQueueStore {
       const values: any[] = [];
 
       if (updates.attempts !== undefined) {
-        setClauses.push('attempts = ?');
+        setClauses.push("attempts = ?");
         values.push(updates.attempts);
       }
       if (updates.lastAttemptAt !== undefined) {
-        setClauses.push('lastAttemptAt = ?');
+        setClauses.push("lastAttemptAt = ?");
         values.push(updates.lastAttemptAt);
       }
 
@@ -169,12 +186,12 @@ export class SQLiteQueueStore implements PersistentQueueStore {
       values.push(id);
 
       this.getDb().run(
-        `UPDATE oracle_dlq SET ${setClauses.join(', ')} WHERE id = ?`,
+        `UPDATE oracle_dlq SET ${setClauses.join(", ")} WHERE id = ?`,
         values,
         (err: Error | null) => {
           if (err) reject(err);
           else resolve();
-        }
+        },
       );
     });
   }
@@ -187,7 +204,7 @@ export class SQLiteQueueStore implements PersistentQueueStore {
         (err: Error | null, row: any) => {
           if (err) reject(err);
           else resolve(row?.count || 0);
-        }
+        },
       );
     });
   }

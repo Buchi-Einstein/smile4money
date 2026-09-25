@@ -1,24 +1,12 @@
 import { Router } from 'express';
 import { RateLimitStore, createRateLimitMiddleware } from '../middleware/rate-limit.js';
-import { fetchLichessResult, GameNotFoundError } from '../fetchers/lichess.js';
-import { fetchChessDotComResult } from '../fetchers/chessdotcom.js';
+import { validateGameInput, validateGame } from '../services/validate-game-service.js';
 
 const router = Router();
 
 // Rate limiter: 100 requests per 60 seconds per IP
 const rateLimitStore = new RateLimitStore(100, 60 * 1000, 100);
 router.use(createRateLimitMiddleware(rateLimitStore));
-
-interface ValidateGameResponse {
-  valid: boolean;
-  platform: string;
-  gameId: string;
-  status?: string;
-  whitePlayer?: string;
-  blackPlayer?: string;
-  result?: string | null;
-  message?: string;
-}
 
 router.post('/', async (req, res) => {
   const payload = req.body;
@@ -27,70 +15,36 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Request body must be JSON' });
   }
 
-  const { gameId, platform, username } = payload;
-
-  if (!gameId || typeof gameId !== 'string' || gameId.length === 0) {
-    return res.status(400).json({ error: 'gameId is required' });
+  const inputError = validateGameInput(payload);
+  if (inputError) {
+    return res.status(400).json({ error: inputError });
   }
 
-  if (gameId.length >= 512) {
-    return res.status(400).json({ error: 'gameId is too long' });
-  }
+  const result = await validateGame({
+    gameId: payload.gameId,
+    platform: payload.platform,
+    username: typeof payload.username === 'string' ? payload.username : undefined,
+  });
 
-  if (!platform || (platform !== 'lichess' && platform !== 'chessdotcom')) {
-    return res.status(400).json({ error: 'platform must be lichess or chessdotcom' });
-  }
-
-  try {
-    let response: ValidateGameResponse;
-
-    if (platform === 'lichess') {
-      const result = await fetchLichessResult(gameId);
-      response = {
-        valid: true,
-        platform: 'lichess',
-        gameId: result.gameId,
-        status: result.status,
-        whitePlayer: result.whitePlayer,
-        blackPlayer: result.blackPlayer,
-        result: result.result,
-      };
-    } else {
-      if (!username || typeof username !== 'string' || username.length === 0) {
-        return res.status(400).json({
-          error: 'username is required for chessdotcom validation to look up game archives',
-        });
-      }
-      const result = await fetchChessDotComResult(username, gameId);
-      response = {
-        valid: true,
-        platform: 'chessdotcom',
-        gameId: result.gameId,
-        status: result.status,
-        whitePlayer: result.whitePlayer,
-        blackPlayer: result.blackPlayer,
-        result: result.result,
-      };
-    }
-
-    return res.status(200).json(response);
-  } catch (error) {
-    if (error instanceof GameNotFoundError) {
-      return res.status(404).json({
-        valid: false,
-        platform,
-        gameId,
-        message: error.message,
-      });
-    }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({
-      valid: false,
-      platform,
-      gameId,
-      message: `Validation failed: ${message}`,
+  if (!result.ok) {
+    return res.status(result.status).json({
+      valid: result.valid ?? false,
+      platform: result.platform ?? payload.platform,
+      gameId: result.gameId ?? payload.gameId,
+      ...(result.message ? { message: result.message } : {}),
+      ...(result.error ? { error: result.error } : {}),
     });
   }
+
+  return res.status(200).json({
+    valid: result.valid,
+    platform: result.platform,
+    gameId: result.gameId,
+    status: result.status,
+    whitePlayer: result.whitePlayer,
+    blackPlayer: result.blackPlayer,
+    result: result.result,
+  });
 });
 
 export default router;

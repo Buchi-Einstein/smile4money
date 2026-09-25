@@ -39,8 +39,9 @@ export class RateLimitStore {
   /**
    * Check if a client has exceeded the rate limit.
    * Returns true if the request is allowed, false if rate limited.
+   * When rate limited, also returns the time in seconds until the next token is available.
    */
-  isAllowed(clientId: string): boolean {
+  isAllowed(clientId: string): { allowed: boolean; retryAfterSeconds?: number } {
     const now = Date.now();
     let bucket = this.buckets.get(clientId);
 
@@ -48,7 +49,7 @@ export class RateLimitStore {
       // First request from this client
       bucket = { tokens: this.capacity - 1, lastRefill: now };
       this.buckets.set(clientId, bucket);
-      return true;
+      return { allowed: true };
     }
 
     // Refill tokens based on elapsed time
@@ -63,10 +64,18 @@ export class RateLimitStore {
     // Check if request is allowed
     if (bucket.tokens > 0) {
       bucket.tokens -= 1;
-      return true;
+      return { allowed: true };
     }
 
-    return false;
+    // Rate limited — calculate time until next refill
+    const timeSinceLastRefill = now - bucket.lastRefill;
+    const timeUntilNextRefillMs = this.refillIntervalMs - timeSinceLastRefill;
+    const retryAfterSeconds = Math.ceil(timeUntilNextRefillMs / 1000);
+
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, retryAfterSeconds),
+    };
   }
 
   /**
@@ -108,6 +117,22 @@ export class RateLimitStore {
   }
 }
 
+interface RateLimitMiddlewareOptions {
+  keyExtractor?: (req: Request) => string;
+  statusCode?: number;
+  message?: string;
+  /**
+   * IP addresses of proxies that this server trusts to set the X-Forwarded-For
+   * header (e.g. a reverse proxy like nginx or a load balancer).
+   *
+   * The X-Forwarded-For header is only honored when the request's direct
+   * connection peer (req.socket.remoteAddress) is in this list. Defaults to an
+   * empty list, meaning the header is never trusted and the direct connection
+   * IP is used for rate limiting.
+   */
+  trustedProxies?: string[];
+}
+
 /**
  * Express middleware factory for rate limiting by IP address.
  *
@@ -118,27 +143,33 @@ export class RateLimitStore {
  * Example usage:
  * ```
  * const limiter = new RateLimitStore(100, 60000, 100); // 100 req/min
- * router.use(createRateLimitMiddleware(limiter));
+ * router.use(createRateLimitMiddleware(limiter, { trustedProxies: ['127.0.0.1'] }));
  * ```
  */
 export function createRateLimitMiddleware(
   store: RateLimitStore,
-  options?: { keyExtractor?: (req: Request) => string; statusCode?: number; message?: string },
+  options?: RateLimitMiddlewareOptions,
 ) {
-  const keyExtractor = options?.keyExtractor || ((req: Request) => getClientIp(req));
+  const trustedProxies = options?.trustedProxies || [];
+  const keyExtractor = options?.keyExtractor || ((req: Request) => getClientIp(req, trustedProxies));
   const statusCode = options?.statusCode || 429;
   const message = options?.message || 'Too many requests, please try again later';
 
   return (req: Request, res: Response, next: NextFunction) => {
     const clientId = keyExtractor(req);
-    const allowed = store.isAllowed(clientId);
+    const result = store.isAllowed(clientId);
 
     // Set rate limit headers for all responses
     const remainingTokens = store.getRemainingTokens(clientId);
     res.setHeader('X-RateLimit-Limit', '100'); // capacity
     res.setHeader('X-RateLimit-Remaining', String(Math.max(0, remainingTokens)));
 
-    if (!allowed) {
+    if (!result.allowed) {
+      // Set Retry-After header per RFC 6585
+      if (result.retryAfterSeconds) {
+        res.setHeader('Retry-After', String(result.retryAfterSeconds));
+      }
+
       return res.status(statusCode).json({
         error: 'rate_limit_exceeded',
         message,
@@ -151,13 +182,21 @@ export function createRateLimitMiddleware(
 
 /**
  * Extract the client's IP address from the request.
- * Considers X-Forwarded-For header for proxied requests.
+ *
+ * The X-Forwarded-For header is only honored when the request arrives directly
+ * from a trusted proxy; otherwise a client could spoof the header to cycle
+ * through fake IPs and bypass per-IP rate limiting.
  */
-function getClientIp(req: Request): string {
-  const forwarded = req.header('X-Forwarded-For');
-  if (forwarded) {
-    // X-Forwarded-For can be a comma-separated list; take the first IP
-    return forwarded.split(',')[0].trim();
+function getClientIp(req: Request, trustedProxies: string[]): string {
+  const remoteAddress = req.socket.remoteAddress || 'unknown';
+
+  if (trustedProxies.includes(remoteAddress)) {
+    const forwarded = req.header('X-Forwarded-For');
+    if (forwarded) {
+      // X-Forwarded-For can be a comma-separated list; take the first IP (the original client)
+      return forwarded.split(',')[0].trim();
+    }
   }
-  return req.socket.remoteAddress || 'unknown';
+
+  return remoteAddress;
 }

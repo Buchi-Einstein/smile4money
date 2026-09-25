@@ -2,7 +2,10 @@
 
 ## System Components
 
-smile4money is composed of two Soroban smart contracts and an off-chain oracle service.
+smile4money is composed of three Soroban smart contracts — **escrow**, **oracle**,
+and **contract-registry** — and an off-chain oracle service. The
+[contract-registry](#contract-registry) is a lightweight on-chain directory of
+deployed contract addresses (see its dedicated section below).
 
 ```mermaid
 flowchart TD
@@ -11,6 +14,7 @@ flowchart TD
     FE[Frontend]
     EC[Escrow Contract<br/>Soroban]
     OC[Oracle Contract<br/>Soroban]
+    CR[Contract Registry<br/>Soroban]
     OOS[Off-chain Oracle<br/>Service]
     LA[Lichess API]
     CA[Chess.com API]
@@ -30,6 +34,10 @@ flowchart TD
 
     EC -->|payout<br/>stake_amount × 2| P1
     EC -->|payout<br/>stake_amount × 2| P2
+
+    EC -.->|registered at deploy| CR
+    OC -.->|registered at deploy| CR
+    FE -.->|resolve live contract IDs| CR
 ```
 
 ## Match Lifecycle
@@ -194,6 +202,8 @@ initialize(admin: Address, max_events: u32) -> Result<(), Error>
 register_contract(caller: Address, contract_id: Symbol) -> Result<(), Error>
 update_contract(caller: Address, contract_id: Symbol) -> Result<(), Error>
 deregister_contract(caller: Address, contract_id: Symbol) -> Result<(), Error>
+registration_count() -> u32
+get_registration(contract_id: Symbol) -> Result<ContractRecord, Error>
 submit_event(caller: Address, event_name: Symbol) -> Result<(), Error>
 pause(caller: Address) -> Result<(), Error>
 unpause(caller: Address) -> Result<(), Error>
@@ -224,10 +234,18 @@ cap is reached every further call returns `Error::MaxEventsReached`.
 | `DataKey::Admin` | Instance | Admin address |
 | `DataKey::Paused` | Instance | Circuit-breaker flag |
 | `DataKey::MaxEvents` | Instance | Maximum event log capacity |
-| `DataKey::Registrations` | Instance | `Map<Symbol, ContractRecord>` — all registered contracts |
+| `DataKey::RegistrationCount` | Instance | `u32` counter of live registrations, used to bound pagination loops |
+| `DataKey::Registration(Symbol)` | Persistent | One `ContractRecord` per registered contract, keyed by its `Symbol` |
 | `DataKey::Events` | Instance | `Vec<Symbol>` — ordered event log |
 
 `ContractRecord` fields: `registrant: Address`, `contract_id: Symbol`, `active: bool`.
+
+Each registration lives in its own persistent storage entry (`DataKey::Registration(Symbol)`),
+mirroring how the escrow contract stores match records. Reads and writes touch only the entry
+for the affected contract instead of deserializing the whole registry, and growth no longer
+risks exceeding Stellar's per-entry storage size limit. `registration_count()` returns the
+number of live registrations so off-chain pagination can iterate `get_registration` calls
+without scanning a monolithic map.
 
 ### Frontend usage
 

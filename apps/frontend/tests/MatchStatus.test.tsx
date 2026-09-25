@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { MatchStatus } from '../src/components/MatchStatus';
 
@@ -89,6 +89,41 @@ describe('MatchStatus — state rendering with match data', () => {
     await waitFor(() => {
       expect(screen.getByTestId('state-active')).toBeInTheDocument();
     });
+  });
+
+  it('warns when a polling refresh fails while showing cached data', async () => {
+    vi.useFakeTimers();
+    const onFetchMatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: '123',
+        state: 'Active',
+        player1: 'GPLAYER1ABC',
+        player2: 'GPLAYER2XYZ',
+        stakeAmount: '100',
+        token: 'xlm',
+        platform: 'lichess',
+        gameId: 'game-abc',
+      })
+      .mockRejectedValueOnce(new Error('Network unavailable'));
+
+    render(<MatchStatus matchId="123" onFetchMatch={onFetchMatch} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('state-active')).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('match-refresh-warning')).toHaveTextContent(
+      'Unable to refresh — showing last known state.',
+    );
+    expect(screen.getByTestId('state-active')).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it('renders completed state with winner', async () => {

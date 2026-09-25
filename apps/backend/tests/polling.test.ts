@@ -48,6 +48,17 @@ class MockGamePoller implements GamePoller {
   }
 }
 
+/**
+ * Mock poller that always returns a failed status with an optional reason.
+ */
+class FailingGamePoller implements GamePoller {
+  constructor(private readonly reason?: string) {}
+
+  async poll(_job: PollJob) {
+    return { status: 'failed' as const, reason: this.reason };
+  }
+}
+
 describe('Game Polling System', () => {
   describe('calculateNextPollDelay', () => {
     it('returns base interval when no backoff (multiplier=1.0)', () => {
@@ -190,10 +201,10 @@ describe('Game Polling System', () => {
         pollingIntervalMs: 100, // Fast for testing
         maxPollingAttempts: 5,
         backoffMultiplier: 1.0,
+        onGameCompleted: vi.fn().mockResolvedValue(undefined),
+        onMaxAttemptsExceeded: vi.fn().mockResolvedValue(undefined),
       });
-    });
-
-    it('detects in-progress game and keeps job in store', async () => {
+    });    it('detects in-progress game and keeps job in store', async () => {
       const job = store.createJob(1, 'game-123', 'lichess');
       poller.setGameStatus('game-123', 'in_progress');
 
@@ -244,6 +255,183 @@ describe('Game Polling System', () => {
 
       expect(job.pollingAttempt).toBe(1);
       expect(job.lastPolledAt).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('calls onMaxAttemptsExceeded with job and reason when limit is reached', async () => {
+      const failingPoller = new FailingGamePoller('game_not_found');
+      const onMaxAttemptsExceeded = vi.fn().mockResolvedValue(undefined);
+
+      const workerWithCallback = new PollingWorker(
+        store,
+        failingPoller,
+        {
+          pollingIntervalMs: 100,
+          maxPollingAttempts: 1, // Exceed on the very first attempt
+          backoffMultiplier: 1.0,
+          onGameCompleted: vi.fn().mockResolvedValue(undefined),
+          onMaxAttemptsExceeded,
+        },
+      );
+
+      const job = store.createJob(1, 'game-999', 'lichess');
+
+      // Simulate enough increments so pollingAttempt >= maxPollingAttempts
+      store.incrementAttempt(job.id); // attempt = 1, equals maxPollingAttempts = 1
+
+      // Directly exercise the private pollJob path by having the worker poll
+      const cleanup = workerWithCallback.start();
+
+      // Allow micro-tasks to flush
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      cleanup();
+
+      expect(onMaxAttemptsExceeded).toHaveBeenCalledWith(
+        expect.objectContaining({ matchId: 1, gameId: 'game-999' }),
+        'game_not_found',
+      );
+    });
+
+    it('removes job from store when max attempts are exceeded', async () => {
+      const failingPoller = new FailingGamePoller('timeout');
+      const onMaxAttemptsExceeded = vi.fn().mockResolvedValue(undefined);
+
+      const failStore = new PollingJobStore();
+      const workerWithCallback = new PollingWorker(
+        failStore,
+        failingPoller,
+        {
+          pollingIntervalMs: 100,
+          maxPollingAttempts: 1,
+          backoffMultiplier: 1.0,
+          onGameCompleted: vi.fn().mockResolvedValue(undefined),
+          onMaxAttemptsExceeded,
+        },
+      );
+
+      const job = failStore.createJob(2, 'game-888', 'lichess');
+      failStore.incrementAttempt(job.id); // pollingAttempt = 1
+
+      const cleanup = workerWithCallback.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      cleanup();
+
+      // Job must be removed from the store
+      expect(failStore.getJobByMatchId(2)).toBeNull();
+    });
+
+    it('removes job from store on max attempts even when callbacks do not throw', async () => {
+      const failingPoller = new FailingGamePoller('some_error');
+      const noCallbackStore = new PollingJobStore();
+
+      const workerNoCallback = new PollingWorker(
+        noCallbackStore,
+        failingPoller,
+        {
+          pollingIntervalMs: 100,
+          maxPollingAttempts: 1,
+          backoffMultiplier: 1.0,
+          onGameCompleted: vi.fn().mockResolvedValue(undefined),
+          onMaxAttemptsExceeded: vi.fn().mockResolvedValue(undefined),
+        },
+      );
+
+      const job = noCallbackStore.createJob(3, 'game-777', 'lichess');
+      noCallbackStore.incrementAttempt(job.id); // pollingAttempt = 1
+
+      const cleanup = workerNoCallback.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      cleanup();
+
+      // Job is still removed; no callback error thrown
+      expect(noCallbackStore.getJobByMatchId(3)).toBeNull();
+    });
+
+    it('calls onGameCompleted with job and result when game finishes', async () => {
+      const onGameCompleted = vi.fn().mockResolvedValue(undefined);
+      const completedStore = new PollingJobStore();
+
+      const completedWorker = new PollingWorker(
+        completedStore,
+        poller,
+        {
+          pollingIntervalMs: 100,
+          maxPollingAttempts: 5,
+          backoffMultiplier: 1.0,
+          onGameCompleted,
+          onMaxAttemptsExceeded: vi.fn().mockResolvedValue(undefined),
+        },
+      );
+
+      completedStore.createJob(10, 'game-completed', 'lichess');
+      poller.setGameStatus('game-completed', 'completed');
+      poller.setGameResult('game-completed', 'Player1Wins');
+
+      const cleanup = completedWorker.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      cleanup();
+
+      expect(onGameCompleted).toHaveBeenCalledWith(
+        expect.objectContaining({ matchId: 10, gameId: 'game-completed' }),
+        'Player1Wins',
+      );
+    });
+
+    it('removes job from store after onGameCompleted is called', async () => {
+      const onGameCompleted = vi.fn().mockResolvedValue(undefined);
+      const completedStore = new PollingJobStore();
+
+      const completedWorker = new PollingWorker(
+        completedStore,
+        poller,
+        {
+          pollingIntervalMs: 100,
+          maxPollingAttempts: 5,
+          backoffMultiplier: 1.0,
+          onGameCompleted,
+          onMaxAttemptsExceeded: vi.fn().mockResolvedValue(undefined),
+        },
+      );
+
+      completedStore.createJob(11, 'game-done', 'lichess');
+      poller.setGameStatus('game-done', 'completed');
+      poller.setGameResult('game-done', 'Draw');
+
+      const cleanup = completedWorker.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      cleanup();
+
+      expect(completedStore.getJobByMatchId(11)).toBeNull();
+    });
+
+    it('logs an error but does not rethrow when onGameCompleted throws', async () => {
+      const onGameCompleted = vi.fn().mockRejectedValue(new Error('oracle_down'));
+      const errorStore = new PollingJobStore();
+
+      const errorWorker = new PollingWorker(
+        errorStore,
+        poller,
+        {
+          pollingIntervalMs: 100,
+          maxPollingAttempts: 5,
+          backoffMultiplier: 1.0,
+          onGameCompleted,
+          onMaxAttemptsExceeded: vi.fn().mockResolvedValue(undefined),
+        },
+      );
+
+      errorStore.createJob(12, 'game-error', 'lichess');
+      poller.setGameStatus('game-error', 'completed');
+      poller.setGameResult('game-error', 'Player2Wins');
+
+      // Should not throw even though the callback rejects
+      const cleanup = errorWorker.start();
+      await expect(
+        new Promise<void>((resolve) => setTimeout(resolve, 50)),
+      ).resolves.toBeUndefined();
+      cleanup();
+
+      expect(onGameCompleted).toHaveBeenCalled();
     });
   });
 

@@ -413,6 +413,14 @@ export function MatchStatus({
       <div className="match-id-display" data-testid="match-id-display">
         Match ID: <strong>{matchData.id}</strong>
       </div>
+      {fetchStatus === 'error' && (
+        <div className="feedback warning" role="alert" data-testid="match-refresh-warning">
+          <span>Unable to refresh — showing last known state.</span>{' '}
+          <button type="button" className="btn btn-retry" onClick={fetchMatch}>
+            Retry?
+          </button>
+        </div>
+      )}
       {renderStateContent()}
     </div>
   );

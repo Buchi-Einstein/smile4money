@@ -105,6 +105,7 @@ Every PR must pass these CI jobs before it can be merged:
 | WASM build | `Build` |
 | environments.toml validation | `Validate environments.toml` |
 | Frontend type-check / lint / tests | `Frontend` |
+| Backend build (type-check) / tests | `Backend` |
 
 ### Required Reviewers
 
