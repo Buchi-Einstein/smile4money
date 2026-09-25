@@ -14,6 +14,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Scan tracked files for credential patterns
+        run: ./scripts/check-secrets.sh
+
   # ── Issue #894: Split into parallel escrow-tests and oracle-tests jobs ────
   escrow-tests:
     name: Escrow Tests
