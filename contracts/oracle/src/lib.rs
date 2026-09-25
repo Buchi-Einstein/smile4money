@@ -59,7 +59,7 @@ pub use constants::*;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{DataKey, MatchResult, ResultEntry};
+use types::{DataKey, InstanceState, MatchResult, ResultEntry};
 
 /// Validate that every byte of `game_id` belongs to the set `[A-Za-z0-9_-]`.
 ///
@@ -105,10 +105,16 @@ impl OracleContract {
     ///
     /// Returns [`Error::AlreadyInitialized`] if the contract has already been set up.
     pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
-        if env.storage().instance().has(&DataKey::Admin) {
+        if env.storage().instance().has(&DataKey::InstanceState) {
             return Err(Error::AlreadyInitialized);
         }
-        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(
+            &DataKey::InstanceState,
+            &InstanceState {
+                admin: admin.clone(),
+                result_count: 0,
+            },
+        );
         env.storage()
             .instance()
             .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
@@ -147,11 +153,14 @@ impl OracleContract {
         game_id: String,
         result: MatchResult,
     ) -> Result<(), Error> {
-        let admin: Address = env
+        // Keep admin and result_count in one instance entry so this hot path loads both
+        // values with one storage read instead of reading each key independently.
+        let mut instance_state: InstanceState = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&DataKey::InstanceState)
             .ok_or(Error::Unauthorized)?;
+        let admin = instance_state.admin.clone();
         admin.require_auth();
 
         let game_id_len = game_id.len();
@@ -193,14 +202,10 @@ impl OracleContract {
 
         // Increment the result count so callers can construct efficient page ranges
         // without scanning sparse ID spaces.
-        let prev_count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ResultCount)
-            .unwrap_or(0u64);
+        instance_state.result_count += 1;
         env.storage()
             .instance()
-            .set(&DataKey::ResultCount, &(prev_count + 1));
+            .set(&DataKey::InstanceState, &instance_state);
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -257,11 +262,12 @@ impl OracleContract {
     ///   (`CAAAA…AAAD2KM`). That address can never sign, so storing it would permanently
     ///   brick the contract.
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
-        let admin: Address = env
+        let mut instance_state: InstanceState = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&DataKey::InstanceState)
             .ok_or(Error::Unauthorized)?;
+        let admin = instance_state.admin.clone();
         admin.require_auth();
 
         // Reject the zero/burn address. The all-zeroes contract address
@@ -286,7 +292,10 @@ impl OracleContract {
             return Ok(());
         }
 
-        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        instance_state.admin = new_admin.clone();
+        env.storage()
+            .instance()
+            .set(&DataKey::InstanceState, &instance_state);
         env.storage()
             .instance()
             .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
@@ -326,7 +335,8 @@ impl OracleContract {
         let admin: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get::<DataKey, InstanceState>(&DataKey::InstanceState)
+            .map(|state| state.admin)
             .ok_or(Error::Unauthorized)?;
         if caller != admin {
             return Err(Error::Unauthorized);
@@ -365,8 +375,9 @@ impl OracleContract {
     pub fn get_result_count(env: Env) -> u64 {
         env.storage()
             .instance()
-            .get(&DataKey::ResultCount)
-            .unwrap_or(0u64)
+            .get::<DataKey, InstanceState>(&DataKey::InstanceState)
+            .map(|state| state.result_count)
+            .unwrap_or(0)
     }
 
     /// Enumerate stored results for off-chain reconciliation.
@@ -391,7 +402,8 @@ impl OracleContract {
         let result_count: u64 = env
             .storage()
             .instance()
-            .get(&DataKey::ResultCount)
+            .get::<DataKey, InstanceState>(&DataKey::InstanceState)
+            .map(|state| state.result_count)
             .unwrap_or(0u64);
         let end = start.saturating_add(cap as u64).min(result_count);
         let mut out: Vec<(u64, ResultEntry)> = Vec::new(&env);

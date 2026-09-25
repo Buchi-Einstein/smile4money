@@ -18,6 +18,7 @@ RPC_URL="https://soroban-testnet.stellar.org"
 NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 IDENTITY="deployer"
 WASM_DIR="target/wasm32-unknown-unknown/release"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Verify stellar CLI is available
 if ! command -v stellar &>/dev/null; then
@@ -73,6 +74,10 @@ CONTRACT_ORACLE=$(stellar contract deploy \
   --rpc-url "$RPC_URL" \
   --network-passphrase "$NETWORK_PASSPHRASE")
 echo "Oracle contract: $CONTRACT_ORACLE"
+
+echo "Verifying deployed WASM hashes..."
+bash "$SCRIPT_DIR/verify_wasm_hash.sh" "$CONTRACT_ESCROW" "$ESCROW_WASM" "$NETWORK" "$RPC_URL" "$NETWORK_PASSPHRASE"
+bash "$SCRIPT_DIR/verify_wasm_hash.sh" "$CONTRACT_ORACLE" "$ORACLE_WASM" "$NETWORK" "$RPC_URL" "$NETWORK_PASSPHRASE"
 
 # Initialize oracle contract (admin = deployer)
 echo "Initializing oracle contract..."
