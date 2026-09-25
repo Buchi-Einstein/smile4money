@@ -158,6 +158,19 @@ impl EscrowContract {
         true
     }
 
+    /// Extend the lifetime of every instance-storage entry held by this contract.
+    ///
+    /// Instance storage (oracle, admin, token, paused, match_count) shares a single
+    /// TTL, so it is bumped as a unit after every mutating call. Without this the
+    /// instance entries would expire while a long-running tournament of matches was
+    /// still in progress and the contract would start failing with storage-not-found
+    /// errors.
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     /// Pre-flight check that the contract retains at least
     /// [`ESCROW_RESERVE_BUFFER_STROOPS`] of `token` **after** a total payout of
     /// `payout_total` is subtracted.
