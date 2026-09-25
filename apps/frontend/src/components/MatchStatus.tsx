@@ -238,17 +238,16 @@ export function MatchStatus({
             <h3 className="state-title">Pending</h3>
             <p className="state-description">Waiting for both players to deposit their stakes.</p>
             <div className="deposit-status" data-testid="deposit-status">
-              <span>
-                Player 1: {p1Deposited}{' '}
+              <span className="deposit-status-row">
+                <span className="match-info-label">Player 1:</span> {p1Deposited}{' '}
                 {matchData.player1 && (
                   <span className="address-small">
                     ({matchData.player1.slice(0, 4)}...{matchData.player1.slice(-4)})
                   </span>
                 )}
               </span>
-              <br />
-              <span>
-                Player 2:{' '}
+              <span className="deposit-status-row">
+                <span className="match-info-label">Player 2:</span>{' '}
                 {matchData.player2 && (
                   <span className="address-small">
                     ({matchData.player2.slice(0, 4)}...{matchData.player2.slice(-4)})
