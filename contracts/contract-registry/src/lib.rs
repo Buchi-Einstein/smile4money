@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Map, Symbol, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -10,6 +10,7 @@ pub enum Error {
     MaxEventsReached = 3,
     ContractNotFound = 4,
     AlreadyRegistered = 5,
+    Overflow = 6,
 }
 
 #[contracttype]
@@ -18,8 +19,13 @@ pub enum DataKey {
     Admin = 0,
     Paused = 1,
     MaxEvents = 2,
-    Registrations = 3,
-    Events = 4,
+    /// Counter of live registrations; kept in instance storage for pagination.
+    RegistrationCount = 3,
+    /// Per-contract registration record, stored in persistent storage under
+    /// its own entry keyed by the contract's `Symbol`. This keeps reads O(1)
+    /// and avoids deserializing (and eventually outgrowing) a single map.
+    Registration(Symbol) = 4,
+    Events = 5,
 }
 
 #[contracttype]
@@ -32,6 +38,16 @@ pub struct ContractRecord {
 
 #[contract]
 pub struct ContractRegistry;
+
+/// TTL handling for per-registration persistent entries, mirroring how the
+/// escrow contract keeps match records alive.
+const REGISTRATION_TTL_LEDGERS: u32 = 100_000;
+const REGISTRATION_TTL_BUMP: u32 = 50_000;
+
+/// Instance-storage TTL threshold.
+const INSTANCE_LIFETIME_THRESHOLD: u32 = 518_400;
+/// Instance-storage TTL bump amount.
+const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
 
 #[contractimpl]
 impl ContractRegistry {
@@ -46,9 +62,12 @@ impl ContractRegistry {
         env.storage().instance().set(&DataKey::MaxEvents, &max_events);
         env.storage()
             .instance()
-            .set(&DataKey::Registrations, &Map::<Symbol, ContractRecord>::new(&env));
+            .set(&DataKey::RegistrationCount, &0u32);
         env.storage().instance().set(&DataKey::Events, &Vec::<Symbol>::new(&env));
 
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
     }
 
@@ -59,6 +78,9 @@ impl ContractRegistry {
         }
         caller.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
     }
 
@@ -69,6 +91,9 @@ impl ContractRegistry {
         }
         caller.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
     }
 
@@ -80,20 +105,37 @@ impl ContractRegistry {
         }
         caller.require_auth();
 
-        let mut registrations: Map<Symbol, ContractRecord> = env.storage().instance().get(&DataKey::Registrations).unwrap();
-        if registrations.contains_key(contract_id.clone()) {
+        let key = DataKey::Registration(contract_id.clone());
+        if env.storage().persistent().has(&key) {
             return Err(Error::AlreadyRegistered);
         }
 
-        registrations.set(
-            contract_id.clone(),
-            ContractRecord {
+        env.storage().persistent().set(
+            &key,
+            &ContractRecord {
                 registrant: caller.clone(),
                 contract_id: contract_id.clone(),
                 active: true,
             },
         );
-        env.storage().instance().set(&DataKey::Registrations, &registrations);
+        env.storage().persistent().extend_ttl(
+            &key,
+            REGISTRATION_TTL_LEDGERS,
+            REGISTRATION_TTL_BUMP,
+        );
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistrationCount)
+            .unwrap_or(0);
+        let count = count.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistrationCount, &count);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
     }
 
@@ -105,25 +147,24 @@ impl ContractRegistry {
         }
         caller.require_auth();
 
-        let registrations: Map<Symbol, ContractRecord> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Registrations)
-            .unwrap_or_else(|| Map::new(&env));
-        if !registrations.contains_key(contract_id.clone()) {
+        let key = DataKey::Registration(contract_id.clone());
+        if !env.storage().persistent().has(&key) {
             return Err(Error::ContractNotFound);
         }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
     }
 
     pub fn deregister_contract(env: Env, caller: Address, contract_id: Symbol) -> Result<(), Error> {
         Self::ensure_not_paused(&env)?;
-        let mut registrations: Map<Symbol, ContractRecord> = env
+        let key = DataKey::Registration(contract_id.clone());
+        let record: ContractRecord = env
             .storage()
-            .instance()
-            .get(&DataKey::Registrations)
-            .unwrap_or_else(|| Map::new(&env));
-        let record = registrations.get(contract_id.clone()).ok_or(Error::ContractNotFound)?;
+            .persistent()
+            .get(&key)
+            .ok_or(Error::ContractNotFound)?;
         let is_registrant = record.registrant == caller;
         if !is_registrant {
             let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::Unauthorized)?;
@@ -132,13 +173,46 @@ impl ContractRegistry {
             }
         }
         caller.require_auth();
-        registrations.remove(contract_id.clone());
-        env.storage().instance().set(&DataKey::Registrations, &registrations);
+        env.storage().persistent().remove(&key);
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegistrationCount)
+            .unwrap_or(0);
+        let count = count.saturating_sub(1);
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistrationCount, &count);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
+    }
+
+    /// Number of live registrations. Use this to bound pagination loops.
+    pub fn registration_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RegistrationCount)
+            .unwrap_or(0)
+    }
+
+    /// Fetch a single registration without deserializing the whole registry.
+    pub fn get_registration(env: Env, contract_id: Symbol) -> Result<ContractRecord, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Registration(contract_id))
+            .ok_or(Error::ContractNotFound)
     }
 
     pub fn submit_event(env: Env, caller: Address, event_name: Symbol) -> Result<(), Error> {
         Self::ensure_not_paused(&env)?;
+        // Only the configured admin may submit registry events.
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::Unauthorized)?;
+        if admin != caller {
+            return Err(Error::Unauthorized);
+        }
         caller.require_auth();
         let max_events: u32 = env.storage().instance().get(&DataKey::MaxEvents).unwrap_or(0);
         let mut events: Vec<Symbol> = env
@@ -151,6 +225,9 @@ impl ContractRegistry {
         }
         events.push_back(event_name);
         env.storage().instance().set(&DataKey::Events, &events);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         Ok(())
     }
 

@@ -126,6 +126,16 @@ describe('POST /api/matches', () => {
     expect(response.status).toBe(400);
   });
 
+  it('returns 400 when stakeAmount is not a whole number', async () => {
+    mockLichessGameFound('lichess-game-abc123');
+    const response = await request(app)
+      .post('/api/matches')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', stakeAmount: 1.5, token: 'XLM', gameId: 'lichess-game-abc123', platform: 'lichess' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('stakeAmount must be a whole number of stroops');
+  });
+
   it('returns 400 when gameId is missing', async () => {
     const response = await request(app)
       .post('/api/matches')

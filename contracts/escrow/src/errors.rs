@@ -1,6 +1,12 @@
 use soroban_sdk::contracterror;
 
+pub use smile4money_common::SharedError;
+
 /// Errors returned by the escrow contract.
+///
+/// Variants shared with the oracle contract (same semantic meaning, same numeric code)
+/// are also defined in [`smile4money_common::SharedError`]. The [`From<SharedError>`]
+/// implementation allows propagating shared errors with the `?` operator.
 ///
 /// Each variant carries a stable numeric code (the discriminant) that is
 /// encoded on-chain and surfaced to clients. Do **not** renumber existing
@@ -9,35 +15,36 @@ use soroban_sdk::contracterror;
 ///
 /// # Error code table
 ///
-/// | Code | Variant            | Meaning                                              |
-/// |------|--------------------|------------------------------------------------------|
-/// |  1   | MatchNotFound      | No match exists for the given match_id               |
-/// |  2   | AlreadyFunded      | The calling player has already deposited for this match |
-/// |  3   | NotFunded          | submit_result called before both players deposited   |
-/// |  4   | Unauthorized       | Caller is not permitted to perform this action       |
-/// |  5   | InvalidState       | Operation is not valid in the match's current state  |
-/// |  6   | AlreadyExists      | A match with this ID already exists (counter collision) |
-/// |  7   | AlreadyInitialized | Contract has already been initialized                |
-/// |  8   | Overflow           | Match ID counter would overflow u64                  |
-/// |  9   | ContractPaused     | Contract is paused; mutating operations are blocked  |
-/// | 10   | InvalidAmount      | stake_amount must be greater than zero               |
-/// | 11   | InvalidGameId      | game_id is empty or exceeds the 64-byte maximum      |
-/// | 12   | InvalidPlayers     | player1 and player2 must be different addresses      |
-/// | 13   | GameIdMismatch     | Oracle submitted a result for the wrong game_id      |
-/// | 14   | DuplicateGameId    | game_id is already linked to another match           |
-/// | 15   | TransferFailed     | token transfer failed                                |
-/// | 16   | MatchCancelled     | deposit rejected: match has been cancelled           |
-/// | 17   | MatchCompleted     | deposit rejected: match has already completed        |
-/// | 18   | NotPaused          | emergency_drain requires the contract to be paused   |
-/// | 19   | InsufficientAllowance | player has not approved sufficient token allowance |
-/// | 20   | DisputeWindowActive   | finalize_result called before the dispute window has expired |
-/// | 21   | MatchTimedOut         | match has already timed out; use claim_timeout to reclaim funds |
-/// | 22   | InvalidToken          | the provided token address does not match the initialized token |
-/// | 23   | InvalidAdmin          | the new admin address is invalid (zero address or same as current admin) |
-/// | 24   | StakeTooLow           | stake_amount is below the minimum allowed stake |
-/// | 25   | StakeTooHigh          | stake_amount exceeds the maximum allowed stake |
-/// | 26   | InsufficientReserve   | contract balance too low to cover payout + Stellar minimum reserve |
-/// | 27   | InvalidAddress        | a player address is invalid (zero address / burn address) |
+/// | Code | Variant               | Shared? | Meaning                                              |
+/// |------|-----------------------|---------|------------------------------------------------------|
+/// |  1   | MatchNotFound         |         | No match exists for the given match_id               |
+/// |  2   | AlreadyFunded         |         | The calling player has already deposited for this match |
+/// |  3   | NotFunded             |         | submit_result called before both players deposited   |
+/// |  4   | Unauthorized          | ✓       | Caller is not permitted to perform this action       |
+/// |  5   | InvalidState          |         | Operation is not valid in the match's current state  |
+/// |  6   | AlreadyExists         |         | A match with this ID already exists (counter collision) |
+/// |  7   | AlreadyInitialized    | ✓       | Contract has already been initialized                |
+/// |  8   | Overflow              |         | Match ID counter would overflow u64                  |
+/// |  9   | ContractPaused        |         | Contract is paused; mutating operations are blocked  |
+/// | 10   | InvalidAmount         | ✓       | stake_amount must be greater than zero               |
+/// | 11   | InvalidGameId         | ✓       | game_id is empty or exceeds the 64-byte maximum      |
+/// | 12   | InvalidPlayers        |         | player1 and player2 must be different addresses      |
+/// | 13   | GameIdMismatch        |         | Oracle submitted a result for the wrong game_id      |
+/// | 14   | DuplicateGameId       |         | game_id is already linked to another match           |
+/// | 15   | TransferFailed        | ✓       | token transfer failed                                |
+/// | 16   | MatchCancelled        |         | deposit rejected: match has been cancelled           |
+/// | 17   | MatchCompleted        |         | deposit rejected: match has already completed        |
+/// | 18   | NotPaused             |         | emergency_drain requires the contract to be paused   |
+/// | 19   | InsufficientAllowance |         | player has not approved sufficient token allowance   |
+/// | 20   | DisputeWindowActive   |         | finalize_result called before the dispute window has expired |
+/// | 21   | MatchTimedOut         |         | match has already timed out; use claim_timeout       |
+/// | 22   | InvalidToken          |         | the provided token address does not match the initialized token |
+/// | 23   | InvalidAdmin          | ✓       | the new admin address is invalid                     |
+/// | 24   | StakeTooLow           |         | stake_amount is below the minimum allowed stake      |
+/// | 25   | StakeTooHigh          |         | stake_amount exceeds the maximum allowed stake       |
+/// | 26   | InsufficientReserve   |         | contract balance too low to cover payout + Stellar minimum reserve |
+/// | 27   | InvalidAddress        |         | a player address is invalid (zero address / burn address) |
+/// | 28   | DisputeWindowExpired  |         | override_result called after the dispute window expired |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -51,17 +58,17 @@ pub enum Error {
     NotFunded = 3,
 
     /// [E004] Caller is not the oracle, admin, or an authorised player for this operation.
+    /// **Shared** — same code as [`SharedError::Unauthorized`].
     Unauthorized = 4,
 
     /// [E005] The requested operation is not valid in the match's current `MatchState`.
-    /// Valid transitions: Pending → Active (deposit), Pending → Cancelled (cancel_match),
-    /// Active → Completed (submit_result).
     InvalidState = 5,
 
     /// [E006] A match record already exists at this ID (internal counter collision).
     AlreadyExists = 6,
 
     /// [E007] `initialize` has already been called; the contract cannot be re-initialized.
+    /// **Shared** — same code as [`SharedError::AlreadyInitialized`].
     AlreadyInitialized = 7,
 
     /// [E008] The match ID counter has reached `u64::MAX` and cannot be incremented safely.
@@ -72,23 +79,24 @@ pub enum Error {
     ContractPaused = 9,
 
     /// [E010] `stake_amount` must be a positive integer greater than zero.
+    /// **Shared** — same code as [`SharedError::InvalidAmount`].
     InvalidAmount = 10,
 
     /// [E011] `game_id` is empty or exceeds the 64-byte maximum length.
+    /// **Shared** — same code as [`SharedError::InvalidGameId`].
     InvalidGameId = 11,
 
-    /// [E012] `player1` and `player2` must be different addresses; a player cannot
-    /// bet against themselves.
+    /// [E012] `player1` and `player2` must be different addresses.
     InvalidPlayers = 12,
 
-    /// [E013] The oracle submitted a result whose `game_id` does not match the
-    /// `game_id` stored in the match. Prevents cross-match result injection.
+    /// [E013] The oracle submitted a result whose `game_id` does not match the stored game_id.
     GameIdMismatch = 13,
 
     /// [E014] The provided `game_id` is already linked to an existing match.
-    /// Each game may only be used in one match.
     DuplicateGameId = 14,
-    /// token transfer failed
+
+    /// [E015] Token transfer failed.
+    /// **Shared** — same code as [`SharedError::TransferFailed`].
     TransferFailed = 15,
 
     /// [E016] Deposit rejected because the match has been cancelled.
@@ -101,23 +109,19 @@ pub enum Error {
     NotPaused = 18,
 
     /// [E019] The player has not approved sufficient token allowance for the contract.
-    /// Before calling `deposit`, the player must call `token.approve` to allow the
-    /// escrow contract to transfer `stake_amount` tokens on their behalf.
     InsufficientAllowance = 19,
 
-    /// [E020] `finalize_result` was called before the dispute window (`DISPUTE_WINDOW_LEDGERS`)
-    /// has fully elapsed since the oracle submitted the result. Wait until the window expires.
+    /// [E020] `finalize_result` was called before the dispute window has fully elapsed.
     DisputeWindowActive = 20,
 
-    /// [E021] The match has already been active for longer than `TIMEOUT_LEDGERS` without an
-    /// oracle result. The match is effectively timed out; players should call `claim_timeout`.
+    /// [E021] The match has timed out; players should call `claim_timeout`.
     MatchTimedOut = 21,
 
     /// [E022] The provided token address does not match the token set during `initialize`.
-    /// `create_match` requires the token to match the contract's configured token.
     InvalidToken = 22,
 
     /// [E023] The new admin address is invalid (e.g. zero address or same as current admin).
+    /// **Shared** — same code as [`SharedError::InvalidAdmin`].
     InvalidAdmin = 23,
 
     /// [E024] `stake_amount` is below the minimum allowed stake (`MIN_STAKE`).
@@ -126,13 +130,29 @@ pub enum Error {
     /// [E025] `stake_amount` exceeds the maximum allowed stake (`MAX_STAKE`).
     StakeTooHigh = 25,
 
-    /// [E026] The contract's token balance would fall below the required Stellar
-    /// minimum account reserve after the payout. Top up the contract address with
-    /// enough XLM (or configured token) to cover the 1.5 XLM reserve buffer, then retry.
+    /// [E026] The contract's token balance would fall below the required Stellar minimum reserve.
     InsufficientReserve = 26,
 
     /// [E027] One of the player addresses is invalid (e.g. zero address / burn address).
-    /// Players must be valid, controlled addresses. Matches created with zero addresses
-    /// would result in payout funds being sent to uncontrolled addresses.
     InvalidAddress = 27,
+
+    /// [E028] `override_result` was called after the dispute window expired.
+    DisputeWindowExpired = 28,
+}
+
+/// Convert a [`SharedError`] into an escrow [`Error`].
+///
+/// This enables the `?` operator when calling helper functions that return
+/// `Result<_, SharedError>`, propagating them as the equivalent local variant.
+impl From<SharedError> for Error {
+    fn from(e: SharedError) -> Self {
+        match e {
+            SharedError::Unauthorized => Error::Unauthorized,
+            SharedError::AlreadyInitialized => Error::AlreadyInitialized,
+            SharedError::InvalidAmount => Error::InvalidAmount,
+            SharedError::InvalidGameId => Error::InvalidGameId,
+            SharedError::TransferFailed => Error::TransferFailed,
+            SharedError::InvalidAdmin => Error::InvalidAdmin,
+        }
+    }
 }

@@ -91,7 +91,7 @@ The validate-game endpoint is rate-limited to prevent abuse by unauthenticated u
 
 - **Limit**: 100 requests per 60 seconds per IP address
 - **Algorithm**: Token bucket with automatic refill
-- **IP Detection**: Respects `X-Forwarded-For` header for proxied requests
+- **IP Detection**: Uses the direct connection IP. The `X-Forwarded-For` header is only honored when the request arrives from a proxy listed in the middleware's `trustedProxies` option (e.g. your own reverse proxy); by default the header is ignored so clients cannot spoof it to bypass rate limiting.
 
 #### Rate Limit Headers
 
