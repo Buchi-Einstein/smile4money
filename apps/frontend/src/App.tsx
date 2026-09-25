@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { useStellarWallet } from './hooks/useStellarWallet';
 import { useTheme } from './hooks/useTheme';
 import type { WalletStatus } from './types';
+import { invalidateHistoryCache } from './pages/history-cache';
 
 const ClaimBurn = lazy(() =>
   import('./components/claim-burn').then((m) => ({ default: m.ClaimBurn })),
@@ -98,6 +99,7 @@ export function App() {
       networkPassphrase,
     });
     await signAndSubmitTransaction(signedTxXdr, server);
+    invalidateHistoryCache(address);
     return '1'; // Placeholder match ID
   };
 
@@ -123,6 +125,7 @@ export function App() {
       networkPassphrase,
     });
     await signAndSubmitTransaction(signedTxXdr, server);
+    invalidateHistoryCache(address);
   };
 
   return (
