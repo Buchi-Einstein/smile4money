@@ -130,6 +130,24 @@ fn is_zero_address(env: &Env, addr: &Address) -> bool {
     addr == &zero_address
 }
 
+/// The trustless chess-match escrow contract.
+///
+/// This unit struct is a marker and carries no state of its own. All state lives
+/// in the contract's storage, addressed by the `DataKey` enum in `types.rs`, and
+/// every operation is exposed as an associated function in the `#[contractimpl]`
+/// block below.
+///
+/// The public data model is:
+///
+/// | Concept            | Type                                                    |
+/// |--------------------|---------------------------------------------------------|
+/// | Per-match state    | `Match` (persistent, keyed by `DataKey::Match`)          |
+/// | Lifecycle          | `MatchState`                                            |
+/// | Oracle result      | `Winner`, wrapped in `OptionalWinner` while in dispute  |
+/// | Storage keys       | `DataKey`                                               |
+/// | Error codes        | `Error` in `errors.rs`                                  |
+///
+/// See the crate-level documentation above for the full state machine.
 #[contract]
 pub struct EscrowContract;
 
