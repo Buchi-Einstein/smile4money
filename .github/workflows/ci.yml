@@ -145,6 +145,36 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  # ── Issue #1799: fail the build on undocumented public items ──────────────
+  rustdoc:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master
+        with:
+          toolchain: 1.88.0
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # -D missing-docs (not -D warnings) so an undocumented public item fails the
+      # build, while pre-existing intra-doc link warnings stay non-fatal.
+      - name: Build escrow documentation
+        run: cargo doc -p smile4money-escrow --no-deps
+        env:
+          RUSTDOCFLAGS: -D missing-docs
+
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest

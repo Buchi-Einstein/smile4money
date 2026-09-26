@@ -52,6 +52,11 @@
 //! - Full API reference with CLI examples: [`docs/api-reference.md`](../../docs/api-reference.md)
 //! - Emergency procedures: [`docs/runbook.md`](../../docs/runbook.md)
 
+// Enforced for every item in this crate, and denied outright by the `Rustdoc`
+// CI job. The two `#[allow(missing_docs)]` attributes below are the only
+// exemptions: they cover items that soroban's `#[contract]` and `#[contractimpl]`
+// macros generate, which cannot be documented from this crate's source.
+#![warn(missing_docs)]
 #![no_std]
 
 mod errors;
@@ -130,9 +135,29 @@ fn is_zero_address(env: &Env, addr: &Address) -> bool {
     addr == &zero_address
 }
 
+/// The trustless chess-match escrow contract.
+///
+/// This unit struct is a marker and carries no state of its own. All state lives
+/// in the contract's storage, addressed by the `DataKey` enum in `types.rs`, and
+/// every operation is exposed as an associated function in the `#[contractimpl]`
+/// block below.
+///
+/// The public data model is:
+///
+/// | Concept            | Type                                                    |
+/// |--------------------|---------------------------------------------------------|
+/// | Per-match state    | `Match` (persistent, keyed by `DataKey::Match`)          |
+/// | Lifecycle          | `MatchState`                                            |
+/// | Oracle result      | `Winner`, wrapped in `OptionalWinner` while in dispute  |
+/// | Storage keys       | `DataKey`                                               |
+/// | Error codes        | `Error` in `errors.rs`                                  |
+///
+/// See the crate-level documentation above for the full state machine.
+#[allow(missing_docs)]
 #[contract]
 pub struct EscrowContract;
 
+#[allow(missing_docs)]
 #[contractimpl]
 impl EscrowContract {
     /// Return whether the contract is currently paused.

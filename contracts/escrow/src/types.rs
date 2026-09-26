@@ -141,7 +141,20 @@ pub enum Winner {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OptionalWinner {
+    /// No result is pending.
+    ///
+    /// Set when the match is created and after it leaves
+    /// [`MatchState::PendingResult`]. Stored as
+    /// [`Match::pending_winner`].
     None,
+
+    /// A result has been submitted by the oracle and is awaiting finalization.
+    ///
+    /// The wrapped [`Winner`] is set when the match enters
+    /// [`MatchState::PendingResult`] and may be replaced by the admin via
+    /// [`override_result`](crate::EscrowContract::override_result) while the
+    /// dispute window is open. [`finalize_result`](crate::EscrowContract::finalize_result)
+    /// reads it to determine the payout.
     Some(Winner),
 }
 
