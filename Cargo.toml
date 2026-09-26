@@ -4,6 +4,7 @@ members = [
     "contracts/oracle",
     "contracts/contract-registry",
     "contracts/smile4money-common",
+    "contracts/tournament-bracket",
 ]
 resolver = "2"
 

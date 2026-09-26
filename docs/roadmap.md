@@ -21,9 +21,10 @@ Core escrow and oracle functionality on Stellar Soroban.
 
 ## v2.0 — Tournaments
 
-- Multi-match tournament bracket contract
-- Bracket payout logic (winner advances, loser is eliminated and refunded)
-- Tournament admin role with configurable prize splits
+- Multi-match tournament bracket contract — `contracts/tournament-bracket`, see [ADR-003](adr/003-tournament-bracket.md)
+- Bracket payout logic: the oracle advances the winner of each match, and the champion is paid the whole pot (`entry_fee × entrants`) when the final is decided. There are no per-match payouts and no loser refunds, because paying each match's winner would drain the pot in the first round
+- Tournament admin role, scoped to cancelling a bracket while it is still in registration. Both admin cancellation and the permissionless stalling timeout refund every funded entrant in full
+- Configurable prize splits — not implemented yet; the pot is winner-takes-all
 
 ## v3.0 — Frontend
 
