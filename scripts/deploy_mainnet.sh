@@ -23,39 +23,114 @@ RPC_URL="https://soroban-mainnet.stellar.org"
 NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"
 IDENTITY="deployer"
 WASM_DIR="target/wasm32-unknown-unknown/release"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-write_deployment_manifest() {
-  local network="${1:-mainnet}"
-  local escrow_id="${2:-}"
-  local oracle_id="${3:-}"
+# Verify stellar CLI is available
+if ! command -v stellar &>/dev/null; then
+  echo "Error: stellar CLI not found. Install it from https://developers.stellar.org/docs/tools/developer-tools/cli/install-cli" >&2
+  exit 1
+fi
 
-  if [[ -z "$escrow_id" || -z "$oracle_id" ]]; then
-    echo "Error: both escrow and oracle contract IDs are required for the deployment manifest." >&2
-    return 1
-  fi
+# Verify the deployer identity exists
+if ! stellar keys show "$IDENTITY" &>/dev/null; then
+  echo "Error: identity '$IDENTITY' not found. Run: stellar keys generate $IDENTITY --network $NETWORK" >&2
+  exit 1
+fi
 
-  local manifest_dir="deployments"
-  mkdir -p "$manifest_dir"
+DEPLOYER_ADDRESS=$(stellar keys address "$IDENTITY")
+echo "Deployer: $DEPLOYER_ADDRESS"
+echo "Network:  $NETWORK (PUBLIC — real XLM will be spent)"
+echo ""
+echo "WARNING: This will deploy contracts to the Stellar PUBLIC network."
+echo "         Transactions are irreversible and will consume real XLM."
+echo ""
+read -r -p 'Type exactly "yes" to confirm mainnet deployment: ' confirm
+if [[ "$confirm" != "yes" ]]; then
+  echo "Aborted. (Input was not exactly \"yes\")"
+  exit 1
+fi
 
-  local manifest_path="$manifest_dir/${network}.json"
-  local deployed_at
-  deployed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Build WASM
+echo "Building contracts..."
+cargo build --target wasm32-unknown-unknown --release --quiet
 
-  cat > "$manifest_path" <<EOF
-{
-  "escrow": "$escrow_id",
-  "oracle": "$oracle_id",
-  "deployedAt": "$deployed_at"
-}
-EOF
+ESCROW_WASM="$WASM_DIR/escrow.wasm"
+ORACLE_WASM="$WASM_DIR/oracle.wasm"
 
-  if git rev-parse --show-toplevel >/dev/null 2>&1; then
-    git add -- "$manifest_path" 2>/dev/null || true
-    echo "Deployment manifest staged for commit: $manifest_path"
-  else
-    echo "Deployment manifest written to $manifest_path"
-  fi
+if [[ ! -f "$ESCROW_WASM" ]]; then
+  echo "Error: $ESCROW_WASM not found after build" >&2
+  exit 1
+fi
+if [[ ! -f "$ORACLE_WASM" ]]; then
+  echo "Error: $ORACLE_WASM not found after build" >&2
+  exit 1
+fi
+
+# Deploy escrow contract
+echo "Deploying escrow contract..."
+CONTRACT_ESCROW=$(stellar contract deploy \
+  --wasm "$ESCROW_WASM" \
+  --source "$IDENTITY" \
+  --network "$NETWORK" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE")
+
+# Deploy oracle contract
+echo "Deploying oracle contract..."
+CONTRACT_ORACLE=$(stellar contract deploy \
+  --wasm "$ORACLE_WASM" \
+  --source "$IDENTITY" \
+  --network "$NETWORK" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE")
+
+# Initialize oracle contract (admin = deployer)
+echo "Initializing oracle contract..."
+stellar contract invoke \
+  --id "$CONTRACT_ORACLE" \
+  --source "$IDENTITY" \
+  --network "$NETWORK" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  -- initialize \
+  --admin "$DEPLOYER_ADDRESS"
+
+# Initialize escrow contract (oracle = oracle contract address, admin = deployer)
+echo "Initializing escrow contract..."
+stellar contract invoke \
+  --id "$CONTRACT_ESCROW" \
+  --source "$IDENTITY" \
+  --network "$NETWORK" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  -- initialize \
+  --oracle "$CONTRACT_ORACLE" \
+  --admin "$DEPLOYER_ADDRESS"
+
+# ---------------------------------------------------------------------------
+# Fund escrow contract with a 1.5 XLM (15,000,000 stroops) native reserve
+# buffer. Every Stellar account needs ≥ 1 XLM minimum balance to exist;
+# payouts that would drop the escrow below that threshold abort at the
+# protocol layer, leaving the match state machine stuck. The 0.5 XLM surplus
+# covers rent / inclusion fees. See docs/deployment.md for details.
+# On mainnet this consumes an additional 1.5 XLM from the deployer account
+# (ensure the deployer has enough XLM before running).
+# ---------------------------------------------------------------------------
+ESCROW_STELLAR_ADDRESS=$(stellar contract id address --id "$CONTRACT_ESCROW")
+echo "Funding escrow reserve buffer (1.5 XLM -> $ESCROW_STELLAR_ADDRESS)..."
+stellar tx build \
+  --source "$IDENTITY" \
+  --network "$NETWORK" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --operation payment \
+    --source-account "$DEPLOYER_ADDRESS" \
+    --destination "$ESCROW_STELLAR_ADDRESS" \
+    --asset native \
+    --amount 15000000 \
+  2>/dev/null | stellar tx send --source "$IDENTITY" --network "$NETWORK" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" || {
+  echo "ERROR: failed to send 1.5 XLM reserve buffer to escrow $ESCROW_STELLAR_ADDRESS." >&2
+  echo "Please submit the payment op manually before proceeding to use the contract." >&2
+  exit 1
 }
 
 main() {
@@ -220,3 +295,12 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi
+if grep -q "^VITE_STELLAR_NETWORK=" "$ENV_FILE"; then
+  sed -i "s|^VITE_STELLAR_NETWORK=.*|VITE_STELLAR_NETWORK=mainnet|" "$ENV_FILE"
+fi
+if grep -q "^VITE_STELLAR_RPC_URL=" "$ENV_FILE"; then
+  sed -i "s|^VITE_STELLAR_RPC_URL=.*|VITE_STELLAR_RPC_URL=$RPC_URL|" "$ENV_FILE"
+fi
+
+echo ""
+echo "Mainnet deployment complete. Contract IDs written to $ENV_FILE"

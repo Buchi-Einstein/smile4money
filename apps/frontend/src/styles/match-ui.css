@@ -1,0 +1,529 @@
+/* ==========================================================================
+   match-ui.css — responsive layout for the match-flow components.
+
+   Why this file exists
+   --------------------
+   `CreateMatch`, `DepositStake`, and `MatchStatus` have always shipped plain
+   semantic class names (`create-match`, `form-group`, `btn`, `match-status`, …).
+   Nothing ever defined them: `global-ui.css` covers only the history page and
+   the toast/tx-hash widgets, and it is not imported by the app entrypoint
+   either. So those three components rendered completely unstyled — which is
+   why they did not adapt to narrow viewports, because there was no layout to
+   adapt.
+
+   This file is the single place those classes gain layout, and it is written
+   **mobile-first**: the base rules are the narrow-viewport rules, and the only
+   media query widens things at the 768px boundary named in the issue.
+
+   Mobile viewport targets
+   -----------------------
+   375px  iPhone SE / mini — the narrowest phone still in use
+   414px  iPhone 8 Plus / XR class — the common modern phone
+   768px  iPad portrait — the breakpoint where the two-column layouts switch on
+
+   Invariants relied on below
+   -------------------------
+   1. `box-sizing: border-box` everywhere, so padding never adds to a declared
+      width. Without it a `width: 100%` input plus padding overflows its parent
+      and is the classic cause of a mobile horizontal scrollbar.
+   2. Every interactive control is at least `--touch-target-min` (44px) on its
+      smaller axis — the WCAG 2.2 / Apple HIG minimum comfortable tap size.
+   3. No fixed pixel width anywhere exceeds 320px, so nothing can be wider than
+      the narrowest supported viewport (375px) minus its own padding.
+   4. Long opaque values (Stellar addresses, tx hashes) wrap instead of
+      forcing the page wider, via `overflow-wrap: anywhere`.
+   5. Flex/grid children carry `min-width: 0`, the standard fix for a flex
+      child refusing to shrink below its content and pushing the page wide.
+   ========================================================================== */
+
+:root {
+  /* Minimum comfortable touch target. WCAG 2.2 "Target Size (Minimum)" and the
+     Apple HIG both land on 44px; it is also what Material's 48dp guidance is
+     usually relaxed to. */
+  --touch-target-min: 44px;
+
+  /* Widest the content column ever gets. Matches the `max-w-2xl` (42rem) the
+     app shell already uses, so the two agree. */
+  --content-max: 42rem;
+
+  --radius: 0.75rem;
+  --gap: 1rem;
+
+  --color-surface: #ffffff;
+  --color-border: #d1d5db;
+  --color-text: #111827;
+  --color-muted: #6b7280;
+  --color-accent: #4f46e5;
+  --color-accent-text: #ffffff;
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fef2f2;
+  --color-success: #15803d;
+  --color-success-bg: #f0fdf4;
+  --color-warn: #b45309;
+  --color-warn-bg: #fffbeb;
+  --color-info: #1d4ed8;
+  --color-info-bg: #eff6ff;
+}
+
+/* Dark-mode counterparts, applied under the same `dark` class hook that
+   `useTheme` toggles and that `globals.css` already targets. */
+.dark {
+  --color-surface: #1e293b;
+  --color-border: #475569;
+  --color-text: #e2e8f0;
+  --color-muted: #94a3b8;
+  --color-accent: #818cf8;
+  --color-accent-text: #0f172a;
+  --color-danger: #fca5a5;
+  --color-danger-bg: #450a0a;
+  --color-success: #86efac;
+  --color-success-bg: #052e16;
+  --color-warn: #fcd34d;
+  --color-warn-bg: #451a03;
+  --color-info: #93c5fd;
+  --color-info-bg: #172554;
+}
+
+/* --- Global box model + overflow guards --------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  max-width: 100%;
+}
+
+/* Safety net. Every rule below is written so it does not *need* this, but a
+   single stray wide child should degrade into a clipped pixel rather than a
+   page-wide horizontal scrollbar the user has to hunt for. */
+body {
+  overflow-x: hidden;
+}
+
+/* ==========================================================================
+   Shared surfaces
+   ========================================================================== */
+
+.create-match,
+.deposit-stake,
+.match-status {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 1rem;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 2px 16px rgba(15, 23, 42, 0.08);
+  /* `min-width: 0` on a flex/grid child is what actually allows it to shrink;
+     without it a long unbroken child sets the floor for the whole column. */
+  overflow-wrap: anywhere;
+}
+
+.create-match-title,
+.match-status-title,
+.deposit-title {
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+/* ==========================================================================
+   Buttons — every one of these is a primary touch target
+   ========================================================================== */
+
+.btn,
+.toggle-btn,
+.platform-btn {
+  /* The 44px minimum tap target. `width: 100%` on mobile makes a lone button
+     easy to hit one-handed; the 768px query trims it back to content width
+     for side-by-side groups. */
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+  padding: 0.6rem 1.1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.55rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.btn {
+  display: block;
+  width: 100%;
+  margin-top: var(--gap);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-text);
+  font-weight: 600;
+}
+
+.btn-secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.btn:disabled,
+.toggle-btn:disabled,
+.platform-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn:hover:not(:disabled),
+.toggle-btn:hover:not(:disabled),
+.platform-btn:hover:not(:disabled) {
+  filter: brightness(0.97);
+}
+
+/* Keyboard focus stays visible — the `:hover` above must not be the only way
+   a keyboard user can tell where they are. */
+.btn:focus-visible,
+.toggle-btn:focus-visible,
+.platform-btn:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* --- Segmented button groups (token + platform pickers) ------------------ */
+
+.token-toggle,
+.platform-selector {
+  display: flex;
+  gap: 0.5rem;
+  /* Stacked by default: two half-width side-by-side buttons at 375px each
+     land near 44px wide only by luck, and their labels wrap awkwardly. */
+  flex-direction: column;
+}
+
+.token-toggle > *,
+.platform-selector > * {
+  width: 100%;
+}
+
+.toggle-btn.active,
+.platform-btn.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-text);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Forms
+   ========================================================================== */
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  /* `min-width: 0` + `max-width: 100%` stop a wide input from establishing a
+     floor for the column. */
+  min-width: 0;
+  margin-bottom: var(--gap);
+}
+
+.form-group > label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.form-group input {
+  width: 100%;
+  max-width: 100%;
+  /* 16px exactly: anything smaller makes iOS Safari zoom the page on focus,
+     which is the single most common "the page jumps on mobile" bug. */
+  min-height: var(--touch-target-min);
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.55rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.form-group input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.error-message {
+  color: var(--color-danger);
+  font-size: 0.85rem;
+}
+
+.field-hint,
+.required-hint {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+/* ==========================================================================
+   Feedback banners
+   ========================================================================== */
+
+.feedback,
+.validation-feedback {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.55rem;
+  font-size: 0.9rem;
+  /* Long oracle/network error strings must wrap, not widen the page. */
+  overflow-wrap: anywhere;
+}
+
+.feedback.error,
+.validation-feedback.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.feedback.success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.feedback.warning {
+  background: var(--color-warn-bg);
+  color: var(--color-warn);
+}
+
+.feedback.info,
+.validation-feedback.info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.feedback .btn {
+  margin-top: 0.5rem;
+}
+
+/* ==========================================================================
+   CreateMatch — result panel
+   ========================================================================== */
+
+.match-result {
+  padding: var(--gap);
+  border-radius: var(--radius);
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.match-id,
+.match-id-display {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+/* ==========================================================================
+   DepositStake
+   ========================================================================== */
+
+.match-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: var(--gap);
+  padding: 0.75rem;
+  border-radius: 0.55rem;
+  background: var(--color-info-bg);
+  /* Flex children default to `min-width: auto`, which refuses to shrink below
+     content width. This is what lets the player rows wrap on a 375px screen. */
+  min-width: 0;
+}
+
+.match-info > p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+}
+
+.match-info-label {
+  font-weight: 600;
+}
+
+.address,
+.address-small {
+  /* Stellar addresses are 56 opaque characters — the classic overflow source. */
+  overflow-wrap: anywhere;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.85rem;
+}
+
+.status-indicator {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-indicator.deposited {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-indicator.pending {
+  background: var(--color-warn-bg);
+  color: var(--color-warn);
+}
+
+.tx-hash {
+  display: block;
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+}
+
+.spinner {
+  width: 2rem;
+  height: 2rem;
+  margin: 1rem auto;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: match-ui-spin 0.8s linear infinite;
+}
+
+@keyframes match-ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Respect the OS-level motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+  .btn,
+  .toggle-btn,
+  .platform-btn {
+    transition: none;
+  }
+}
+
+.loading-message,
+.no-match-message,
+.no-refund {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+/* ==========================================================================
+   MatchStatus
+   ========================================================================== */
+
+.state-content {
+  padding: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.state-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.state-description,
+.waiting-oracle,
+.winner-info,
+.dispute-countdown {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+  /* `anywhere` rather than the default `normal`: a game id or address embedded
+     in prose should break even mid-token. */
+  overflow-wrap: anywhere;
+}
+
+.deposit-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+}
+
+/* Each player is its own row rather than a `<br />`-separated inline run, so
+   the row can wrap as a unit on a narrow screen. */
+.deposit-status-row {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.refund-info {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.refund-title {
+  margin: 0 0 0.3rem;
+  font-weight: 600;
+}
+
+.refund-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.9rem;
+}
+
+.match-status-skeleton {
+  padding: 1rem;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+/* ==========================================================================
+   >= 768px — the one breakpoint
+
+   Everything above this point is the single-column mobile layout. Here the
+   segmented groups go side by side, buttons shrink to their content width
+   (they no longer need a full-bleed target with a pointer), and padding opens
+   up.
+   ========================================================================== */
+
+@media (min-width: 768px) {
+  .create-match,
+  .deposit-stake,
+  .match-status {
+    max-width: var(--content-max);
+    margin-inline: auto;
+    padding: 1.5rem;
+  }
+
+  .token-toggle,
+  .platform-selector {
+    flex-direction: row;
+  }
+
+  .token-toggle > *,
+  .platform-selector > * {
+    width: auto;
+    flex: 1 1 0;
+  }
+
+  .btn {
+    width: auto;
+    min-width: 10rem;
+  }
+}

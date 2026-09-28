@@ -49,21 +49,36 @@ jobs:
         run: echo "yes" | ./scripts/deploy_mainnet.sh
 
       - name: Deployment summary
-        env:
-          CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
         run: |
+          # Extract contract addresses from .env written by the deploy script
+          ESCROW_ID=""
+          ORACLE_ID=""
+          if [ -f .env ]; then
+            ESCROW_ID=$(grep -E '^CONTRACT_ESCROW=' .env | cut -d'=' -f2-)
+            ORACLE_ID=$(grep -E '^CONTRACT_ORACLE=' .env | cut -d'=' -f2-)
+          fi
+
           {
             echo "## Mainnet Deployment Summary"
-            echo "**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')"
-            echo "**Commit:** ${{ github.sha }}"
-            echo "**Ref:** ${{ github.ref }}"
+            echo ""
+            echo "| Field   | Value |"
+            echo "| ------- | ----- |"
+            echo "| Date    | $(date -u '+%Y-%m-%d %H:%M UTC') |"
+            echo "| Commit  | \`${{ github.sha }}\` |"
+            echo "| Ref     | \`${{ github.ref }}\` |"
             echo ""
             echo "### Deployed Contracts"
-            if [ -f .env ]; then
-              grep -E '^(CONTRACT_ESCROW|CONTRACT_ORACLE)=' .env || echo "Contract IDs not found in .env"
+            echo ""
+            echo "| Contract | Address |"
+            echo "| -------- | ------- |"
+            if [ -n "$ESCROW_ID" ]; then
+              echo "| Escrow   | \`${ESCROW_ID}\` |"
+            else
+              echo "| Escrow   | _not found in .env_ |"
             fi
-            if [ -n "$CONTRACT_ID" ]; then
-              echo ""
-              echo "**CONTRACT_ID secret:** $CONTRACT_ID"
+            if [ -n "$ORACLE_ID" ]; then
+              echo "| Oracle   | \`${ORACLE_ID}\` |"
+            else
+              echo "| Oracle   | _not found in .env_ |"
             fi
-          } >> $GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"
