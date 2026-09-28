@@ -50,6 +50,8 @@ Each environment requires a `.env` file derived from `.env.example`. The file is
 ```
 STELLAR_NETWORK=<testnet|mainnet|...>
 STELLAR_RPC_URL=<rpc endpoint>
+STELLAR_RPC_POOL_SIZE=<maximum concurrent RPC sockets, default 10>
+STELLAR_RPC_KEEP_ALIVE_TIMEOUT_MS=<keep-alive interval in milliseconds, default 5000>
 CONTRACT_ESCROW=<deployed contract id>
 CONTRACT_ORACLE=<deployed contract id>
 LICHESS_API_TOKEN=<token>

@@ -1,5 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { WalletStatus } from '../types';
+import {
+  DEFAULT_HISTORY_CACHE_TTL_MS,
+  getHistoryCacheEntry,
+  setHistoryCacheEntry,
+} from './history-cache';
 
 const HORIZON_URL = 'https://horizon-testnet.stellar.org';
 const PAGE_SIZE = 20;
@@ -7,6 +12,7 @@ const PAGE_SIZE = 20;
 interface HistoryProps {
   walletState: WalletStatus;
   publicKey?: string | null;
+  cacheTtlMs?: number;
 }
 
 interface HorizonTransaction {
@@ -29,7 +35,7 @@ interface HorizonResponse {
   };
 }
 
-interface HistoryRow {
+export interface HistoryRow {
   id: string;
   matchId: string;
   opponent: string;
@@ -67,7 +73,11 @@ function mapRecord(record: HorizonTransaction, publicKey: string): HistoryRow {
   };
 }
 
-export function History({ walletState, publicKey }: HistoryProps) {
+export function History({
+  walletState,
+  publicKey,
+  cacheTtlMs = DEFAULT_HISTORY_CACHE_TTL_MS,
+}: HistoryProps) {
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -80,10 +90,14 @@ export function History({ walletState, publicKey }: HistoryProps) {
    *  fetched; otherwise the page starting after `cursor` is fetched and
    *  appended to the existing history (Load More behaviour). */
   const fetchPage = useCallback(
-    async (cursor: string | null, append: boolean) => {
+    async (cursor: string | null, append: boolean, background = false) => {
       if (!publicKey) return;
 
-      append ? setLoadingMore(true) : setLoading(true);
+      if (append) {
+        setLoadingMore(true);
+      } else if (!background) {
+        setLoading(true);
+      }
       setError(null);
 
       const url = new URL(`${HORIZON_URL}/accounts/${publicKey}/transactions`);
@@ -109,10 +123,21 @@ export function History({ walletState, publicKey }: HistoryProps) {
         const nextHref = data._links?.next?.href;
         const derived = nextHref ? parseCursor(nextHref) : null;
         setNextCursor(records.length < PAGE_SIZE ? null : derived);
+        if (!append) {
+          setHistoryCacheEntry(publicKey, {
+            history: rows,
+            nextCursor: records.length < PAGE_SIZE ? null : derived,
+            fetchedAt: Date.now(),
+          });
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load history');
       } finally {
-        append ? setLoadingMore(false) : setLoading(false);
+        if (append) {
+          setLoadingMore(false);
+        } else {
+          setLoading(false);
+        }
       }
     },
     [publicKey],
@@ -128,12 +153,20 @@ export function History({ walletState, publicKey }: HistoryProps) {
       return;
     }
 
-    setNextCursor(null);
-    void fetchPage(null, false);
+    const cached = getHistoryCacheEntry(publicKey);
+    const hasFreshCache = cached && Date.now() - cached.fetchedAt < cacheTtlMs;
+    if (cached) {
+      setHistory(cached.history);
+      setNextCursor(cached.nextCursor);
+    } else {
+      setNextCursor(null);
+    }
+    if (!cached || !hasFreshCache) {
+      void fetchPage(null, false, Boolean(cached));
+    }
     // fetchPage is stable (memoised on publicKey); re-run when publicKey or
     // walletState changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicKey, walletState]);
+  }, [publicKey, walletState, cacheTtlMs, fetchPage]);
 
   function handleLoadMore() {
     if (nextCursor && !loadingMore) {

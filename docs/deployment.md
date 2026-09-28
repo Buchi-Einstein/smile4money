@@ -107,9 +107,12 @@ The script performs these steps in order:
 3. Builds both contracts (`escrow.wasm`, `oracle.wasm`) in release mode.
 4. Deploys the escrow contract to testnet.
 5. Deploys the oracle contract to testnet.
-6. Initializes the oracle contract (admin = deployer address).
-7. Initializes the escrow contract (oracle = oracle contract address, admin = deployer address).
-8. Writes `CONTRACT_ESCROW` and `CONTRACT_ORACLE` to `.env`.
+6. Fetches each deployed WASM hash with `stellar contract inspect` and compares it to the local artifact SHA-256.
+7. Initializes the oracle contract (admin = deployer address).
+8. Initializes the escrow contract (oracle = oracle contract address, admin = deployer address).
+9. Writes `CONTRACT_ESCROW` and `CONTRACT_ORACLE` to `.env`.
+
+The script stops with an error if either on-chain hash does not match the local build artifact. Successful checks log both hash values.
 
 **Expected output:**
 ```
@@ -179,6 +182,112 @@ VITE_STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 ```
 
 These values are used by the off-chain oracle service and the frontend.
+
+## Mainnet Prerequisites
+
+Before you touch `deploy_mainnet.sh`, verify every item below. Mainnet transactions are irreversible and mistakes cost real XLM.
+
+### Funded deployer account
+
+A Stellar account must exist on the **Public Network** and hold enough XLM to cover:
+
+| Cost item | Approximate XLM |
+|---|---|
+| Minimum account reserve | 1 XLM |
+| Each contract deploy (upload + create) | 2–4 XLM |
+| Each contract initialization invocation | 0.01–0.1 XLM |
+| Comfortable operational buffer | 5 XLM |
+| **Recommended minimum balance** | **20 XLM** |
+
+Stellar's base reserve is currently **0.5 XLM per entry** (subject to validator vote). Always check the current reserve before deploying: [Stellar account minimums](https://developers.stellar.org/docs/learn/fundamentals/stellar-data-structures/accounts#minimum-balance).
+
+Fees are non-refundable even if the transaction fails. Fund the deployer account before running any deploy command:
+
+```bash
+# Confirm the account is funded on mainnet
+stellar account show \
+  --account "$(stellar keys address deployer)" \
+  --network mainnet \
+  --rpc-url https://soroban-mainnet.stellar.org
+```
+
+Unlike testnet there is **no Friendbot** on mainnet. You must transfer XLM from a funded exchange or wallet.
+
+### Contract size limits
+
+Soroban enforces a hard limit on uploaded WASM binary size. As of Stellar Protocol 21 the limit is **128 KB** per contract WASM. Binaries that exceed this limit are rejected at upload time.
+
+Check the size of your built artifacts before deploying:
+
+```bash
+# Build in release mode with size optimisations
+cargo build --target wasm32-unknown-unknown --release
+
+# Inspect artifact sizes
+wc -c target/wasm32-unknown-unknown/release/escrow.wasm \
+       target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+If a binary is close to or over the limit, add the following profile settings to `Cargo.toml`:
+
+```toml
+[profile.release]
+opt-level = "z"      # optimise for size
+lto = true           # link-time optimisation
+codegen-units = 1    # single codegen unit for better dead-code elimination
+strip = true         # strip debug symbols
+```
+
+Refer to the official Soroban contract size guidance: [Soroban contract best practices — binary size](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet).
+
+### Audit and code review requirements
+
+Financial contracts on mainnet **must** be reviewed before deployment. The following steps are required:
+
+1. **Dependency audit** — run `cargo audit` against the [RustSec advisory database](https://rustsec.org/) and resolve every high/critical advisory:
+   ```bash
+   cargo install cargo-audit   # first-time setup
+   cargo audit
+   ```
+
+2. **Static analysis** — the contract code must pass Clippy with no warnings:
+   ```bash
+   cargo clippy --target wasm32-unknown-unknown -- -D warnings
+   ```
+
+3. **Test suite** — all unit and integration tests must pass on the exact commit being deployed:
+   ```bash
+   cargo test
+   ```
+
+4. **Peer review** — the commit to be deployed must have at least one approval from a team member who did not author the changes being deployed. Use the pull-request process documented in [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+5. **Testnet soak** — the contracts must have been running on testnet under representative load for at least one full test cycle before mainnet promotion. Document the testnet contract IDs and the duration of the soak in the deployment PR description.
+
+6. **Third-party audit (recommended for production value > $10k)** — engage a Soroban-familiar security firm to audit the contract logic. Retain the audit report and link it from the deployment PR.
+
+### Testnet vs. mainnet differences at a glance
+
+| | Testnet | Mainnet |
+|---|---|---|
+| Network passphrase | `Test SDF Network ; September 2015` | `Public Global Stellar Network ; September 2015` |
+| RPC URL | `https://soroban-testnet.stellar.org` | `https://soroban-mainnet.stellar.org` |
+| Horizon URL | `https://horizon-testnet.stellar.org` | `https://horizon.stellar.org` |
+| Deploy script | `./scripts/deploy_testnet.sh` | `./scripts/deploy_mainnet.sh` |
+| Account funding | Friendbot (`https://friendbot.stellar.org`) | Real XLM transfer required |
+| Transactions reversible | No (but no real value) | **No — irreversible and real value** |
+| Confirmation prompt | None | Requires typing `yes` |
+| `.env` `STELLAR_NETWORK` value | `testnet` | `mainnet` |
+
+### Stellar mainnet reference links
+
+- [Stellar mainnet RPC & Horizon endpoints](https://developers.stellar.org/docs/data/rpc/rpc-providers)
+- [Soroban deployment overview](https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-to-testnet)
+- [Account minimums & reserves](https://developers.stellar.org/docs/learn/fundamentals/stellar-data-structures/accounts#minimum-balance)
+- [Stellar CLI reference](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
+- [Network status & incidents](https://status.stellar.org/)
+
+---
 
 ## Mainnet Deployment
 
@@ -286,6 +395,143 @@ Additionally:
 - [ ] Verify the admin and oracle addresses stored on-chain are correct with `stellar contract inspect`.
 - [ ] Run a smoke test: create a test match, deposit stake, and cancel it to verify the full flow.
 - [ ] Update the frontend configuration with the new mainnet contract IDs and network.
+
+## Rollback Procedure (Mainnet)
+
+Soroban contract IDs are immutable. A rollback therefore means deploying the previously
+approved WASM again as new contract instances and switching clients to those new IDs; it does
+not replace the faulty instances or restore their storage. Do not start this procedure until the
+previous release's WASM artifacts, commit, SHA-256 hashes, contract IDs, and initialization
+parameters have been recovered from the deployment record.
+
+### 1. Declare the incident and freeze writes
+
+1. Pause the affected escrow contract using the procedure in [the incident runbook](runbook.md).
+2. Stop the oracle worker and frontend writes so no new match or result transactions are submitted.
+3. Preserve logs, transaction hashes, the current `deployments/mainnet.json`, and a copy of `.env`.
+4. Post an incident notice in the status channel and any user-facing support channel:
+
+   ```text
+   [INCIDENT] Mainnet rollback started at <UTC time>.
+   Affected release: <commit/hash>
+   Impact: new wagers and result submissions are temporarily paused.
+   Funds already recorded on-chain remain on-chain; do not submit duplicate deposits.
+   Next update: <time or cadence>
+   ```
+
+   Update the notice when the rollback is complete, include the replacement contract IDs, and
+   explicitly tell users when creating matches and submitting results is safe again. Keep the
+   incident notice and final resolution available for users who were offline during the event.
+
+### 2. Recover and verify the previous WASM
+
+Download the `wasm-<commit-sha>` CI artifact for the last approved commit, or build that exact
+commit with the pinned reproducible-build image. Verify both hashes before spending mainnet XLM:
+
+```bash
+git show <approved-commit>:Cargo.toml >/dev/null
+unzip wasm-<approved-commit>.zip -d rollback-wasm
+sha256sum rollback-wasm/*.wasm
+```
+
+Compare the result with the hashes recorded for that release. If an artifact or hash is missing,
+stop and investigate; never roll back using an unverified local build.
+
+### 3. Deploy new instances from the previous WASM
+
+The normal deployment script builds the current checkout, so do not run it for a rollback unless
+the checkout has first been pinned to the approved commit. From that clean checkout, run the
+script after confirming its mainnet prompt, or use the equivalent commands below when the
+artifact has been independently verified:
+
+```bash
+MAINNET_RPC="https://soroban-mainnet.stellar.org"
+MAINNET_PASSPHRASE="Public Global Stellar Network ; September 2015"
+DEPLOYER="deployer"
+ADMIN="<admin-address>"
+
+ROLLBACK_ORACLE=$(stellar contract deploy \
+  --wasm rollback-wasm/oracle.wasm --source "$DEPLOYER" --network mainnet \
+  --rpc-url "$MAINNET_RPC" --network-passphrase "$MAINNET_PASSPHRASE")
+
+stellar contract invoke --id "$ROLLBACK_ORACLE" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- initialize --admin "$ADMIN"
+
+ROLLBACK_ESCROW=$(stellar contract deploy \
+  --wasm rollback-wasm/escrow.wasm --source "$DEPLOYER" --network mainnet \
+  --rpc-url "$MAINNET_RPC" --network-passphrase "$MAINNET_PASSPHRASE")
+
+stellar contract invoke --id "$ROLLBACK_ESCROW" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- initialize \
+  --oracle "$ROLLBACK_ORACLE" --admin "$ADMIN"
+```
+
+Fund the replacement escrow with the same 1.5 XLM reserve buffer used by the deployment
+scripts, then run the [WASM hash check](#verify-deployment--wasm-hash-check) against both new
+IDs. Existing matches and balances are not migrated by this procedure. Reconcile or drain any
+affected state according to the incident plan before directing users to the replacement.
+
+### 4. Update the registry and configuration
+
+Back up the current configuration, then update the `CONTRACT_ESCROW` and `CONTRACT_ORACLE`
+values to the replacement IDs and record them in `deployments/mainnet.json`. If the registry is
+deployed, use its admin identity to remove and re-register the affected service entries, or use
+`update_contract` for an existing entry when the registry integration supports that operation:
+
+```bash
+REGISTRY_ID="<contract-registry-id>"
+
+stellar contract invoke --id "$REGISTRY_ID" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- deregister_contract \
+  --caller "$ADMIN" --contract_id escrow
+stellar contract invoke --id "$REGISTRY_ID" --source "$DEPLOYER" \
+  --network mainnet --rpc-url "$MAINNET_RPC" \
+  --network-passphrase "$MAINNET_PASSPHRASE" -- register_contract \
+  --caller "$ADMIN" --contract_id escrow
+```
+
+Repeat the two calls with `oracle` as the service symbol. The current registry contract stores
+service symbols, not Stellar contract addresses, and `update_contract` only refreshes the
+existing entry. Therefore the registry integration or its backing configuration must also be
+updated with `ROLLBACK_ESCROW` and `ROLLBACK_ORACLE`; verify the values returned to clients
+before resuming traffic. Do not deregister an entry until the replacement configuration is ready.
+
+### 5. Verify, resume, and communicate
+
+- Inspect both replacement contracts and compare their WASM hashes with the approved release.
+- Verify the registry/configuration resolves to the replacement IDs.
+- Run a small end-to-end smoke test, then restart the oracle worker and frontend with the updated
+  configuration.
+- Unpause the replacement escrow only after the smoke test succeeds.
+- Post the final user notice with the UTC completion time, replacement IDs, resolved impact, and
+  any action users must take. Keep the faulty IDs blocked from new traffic and retain the full
+  incident timeline.
+
+### Testnet rollback rehearsal
+
+Run this rehearsal before every mainnet release using two successive testnet deployments. Save
+the old and replacement IDs, transaction hashes, WASM hashes, registry query output, and the
+user-notification timestamps in the release record. A successful rehearsal must show:
+
+| Check | Result to record |
+| --- | --- |
+| Previous release WASM hashes match the downloaded artifacts | Pass / hash values |
+| Replacement oracle and escrow initialize with the expected admin and oracle | Pass / transaction hashes |
+| Replacement escrow reserve is funded and both contracts respond to read-only calls | Pass / IDs |
+| Registry/configuration resolves to the replacement IDs after the update | Pass / query output |
+| Pause, user notice, resume, and final notice were completed in order | Pass / UTC timestamps |
+
+The repository-level registry authorization and update behavior can be checked with:
+
+```bash
+cargo test -p contract-registry
+```
+
+Do not mark the rehearsal complete from this unit test alone: the release record must contain the
+actual testnet transaction hashes and query results from the commands above.
 
 ## Verify Deployment — WASM Hash Check
 

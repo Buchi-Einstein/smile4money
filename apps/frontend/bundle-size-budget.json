@@ -1,0 +1,14 @@
+{
+  "budgets": [
+    {
+      "name": "JavaScript chunks",
+      "extensions": [".js"],
+      "maxGzipBytes": 512000
+    },
+    {
+      "name": "Stylesheets",
+      "extensions": [".css"],
+      "maxGzipBytes": 512000
+    }
+  ]
+}
