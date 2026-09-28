@@ -1,4 +1,4 @@
-# Oracle Design
+﻿# Oracle Design
 
 ## Overview
 
@@ -29,15 +29,15 @@ A backend process that:
 
 ```
 Chess platform API
-       │  game finished
-       ▼
+       â”‚  game finished
+       â–¼
 Oracle Service
   1. fetch game result
   2. map to MatchResult enum
   3. oracle_contract.submit_result(match_id, game_id, result)
   4. escrow_contract.submit_result(match_id, winner, oracle_address)
-       │
-       ▼
+       â”‚
+       â–¼
 Escrow Contract
   - verifies caller == stored oracle address
   - verifies match state == Active
@@ -82,7 +82,7 @@ has_result(match_id: u64) -> bool
 ## Security Properties
 
 - The oracle admin key is the only address that can submit results; any other caller is rejected with `Error::Unauthorized`.
-- Once a result is submitted it is immutable — `AlreadySubmitted` prevents overwriting.
+- Once a result is submitted it is immutable â€” `AlreadySubmitted` prevents overwriting.
 - The escrow contract independently verifies the caller against its stored oracle address before executing any payout.
 - The oracle contract and escrow contract are separate deployments; a compromised oracle contract does not grant direct access to escrow funds.
 
@@ -104,7 +104,7 @@ unresolvable and moved to the dead-letter queue (DLQ). It **defaults to 1440**.
 These two values define the **active-monitoring window** for one match:
 
 ```
-1440 attempts × 30 s/attempt = 43 200 s ≈ 12 hours
+1440 attempts Ã— 30 s/attempt = 43 200 s â‰ˆ 12 hours
 ```
 
 So the oracle actively watches a match for **~12 hours** after activation. If the game has not
@@ -115,15 +115,15 @@ on-chain; players can still call `claim_timeout` once the timeout window elapses
 ### Backoff (`POLLING_BACKOFF_MULTIPLIER`)
 
 The delay before the next poll for an in-progress game is
-`POLLING_INTERVAL_MS × POLLING_BACKOFF_MULTIPLIER ^ attempt`.
-`POLLING_BACKOFF_MULTIPLIER` **defaults to 1.0**, i.e. **no backoff** — every attempt is spaced
+`POLLING_INTERVAL_MS Ã— POLLING_BACKOFF_MULTIPLIER ^ attempt`.
+`POLLING_BACKOFF_MULTIPLIER` **defaults to 1.0**, i.e. **no backoff** â€” every attempt is spaced
 exactly 30 s apart, which is what yields the ~12-hour window above. Raising the multiplier (e.g.
 `1.5`) spreads retries out with exponential backoff, lengthening the total window while the
 attempt count stays at 1440.
 
 ### Relationship to `TIMEOUT_LEDGERS`
 
-`TIMEOUT_LEDGERS` is **120 960 ledgers (≈ 7 days at 5 s/ledger)**
+`TIMEOUT_LEDGERS` is **120 960 ledgers (â‰ˆ 7 days at 5 s/ledger)**
 (`contracts/escrow/src/lib.rs:98`). It is the on-chain safety net: if the oracle never submits a
 result within that window, either player can call `claim_timeout` to recover their stake.
 
@@ -133,13 +133,13 @@ on-chain timeout:
 - Polling gives **~12 hours** of active monitoring per match (configurable via the constants above).
 - The 7-day `TIMEOUT_LEDGERS` window is the **trustless fallback** that protects players when the
   oracle service is down, the DLQ is not being drained, or a game runs far longer than expected.
-- A match that exhausts its 1440 polling attempts (≈12 h) still has roughly **6.5 days** of
+- A match that exhausts its 1440 polling attempts (â‰ˆ12 h) still has roughly **6.5 days** of
   on-chain protection remaining before `claim_timeout` becomes available.
 
 Operators should confirm their polling/DLQ config comfortably fits inside the 7-day
-`TIMEOUT_LEDGERS` window. Because 12 h ≪ 7 days, the default polling config **covers** the match
+`TIMEOUT_LEDGERS` window. Because 12 h â‰ª 7 days, the default polling config **covers** the match
 timeout with large margin; only a misconfigured `MAX_POLLING_ATTEMPTS` near or above
-~20 160 attempts (7 days ÷ 30 s) would begin to encroach on it.
+~20 160 attempts (7 days Ã· 30 s) would begin to encroach on it.
 
 ### Configuration
 
@@ -178,3 +178,174 @@ stellar contract invoke --id $CONTRACT_ESCROW \
   --oracle $ORACLE_ADDRESS \
   --admin $ADMIN_ADDRESS
 ```
+
+## ELO-Based Stake Multiplier (v4.0)
+
+Matches between highly-rated players carry a proportionally larger stake. This
+section is the specification for the formula, its parameters, and the failure
+policy. The implementation lives in two files:
+
+| File | Role |
+| --- | --- |
+| `apps/backend/src/services/elo-multiplier.ts` | The formula. Pure, synchronous, no I/O. |
+| `apps/backend/src/services/elo.ts` | Lichess rating lookup and the failure policy. |
+
+### Why it is computed off-chain
+
+The multiplier is resolved by the backend and stored as **match metadata**; the
+escrow contract never re-derives it.
+
+1. **The contract cannot do it.** A Soroban contract has no HTTP client. Any
+   value sourced from the Lichess API has to be fetched before the transaction
+   is built.
+2. **It keeps the payout path clean.** If the contract re-derived the
+   multiplier, a third-party API's uptime and a float formula would sit between
+   a completed match and its payout. The payout should depend only on values
+   committed on-chain when the match was created.
+
+The stake sent to `create_match` is therefore **already multiplied**. The base
+stake the player chose is what the multiplier scales.
+
+### Ratings are read once, at match creation
+
+Both players' ratings are fetched when the match is created, not when the result
+arrives. Reading them later would let a rating change between stake and payout,
+so the multiplier the winner was offered would no longer be the one the formula
+produces. Freezing both inputs at creation makes the price a function of
+committed values.
+
+Source: `GET https://lichess.org/api/user/{username}`, scheduled through the
+shared Lichess rate limiter so rating lookups and game polls draw from one
+budget.
+
+A player is rated by the **first variant they have a rating for**, in the order
+`blitz â†’ bullet â†’ rapid â†’ classical`. An account with no rated games in any of
+them has no rating â€” that is a normal outcome, not an error.
+
+### The formula
+
+The multiplier scales with the **average** of the two ratings, not their
+difference.
+
+```text
+average    = (elo1 + elo2) / 2
+headroom   = clamp((average - MIN_ELO) / (MAX_ELO - MIN_ELO), 0, 1)
+multiplier = BASE_MULTIPLIER + headroom * (MAX_MULTIPLIER - BASE_MULTIPLIER)
+stake      = floor(base_stake * multiplier)
+```
+
+**Why the average and not the difference.** The rating *difference* is what
+decides a game; the rating *level* is what determines what the game is worth.
+Two equally strong players at 2600 should carry a bigger pot than the same two
+players at 800, even though the outcome is a coin flip in either case. Keying
+the multiplier to the difference would price a 2800-vs-2800 match the same as a
+2800-vs-800 mismatch, which is not the intent.
+
+### Parameters
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `MIN_ELO` | `800` | Average at or below which there is no uplift |
+| `MAX_ELO` | `2800` | Average at or above which the multiplier is capped |
+| `BASE_MULTIPLIER` | `1.0` | Multiplier at `MIN_ELO`, and the failure fallback |
+| `MAX_MULTIPLIER` | `2.0` | Multiplier at `MAX_ELO` |
+
+All four are overridable per call via `EloMultiplierConfig`, so the curve can be
+retuned without a code change.
+
+### Worked examples
+
+| Player 1 | Player 2 | Average | Multiplier |
+| --- | --- | --- | --- |
+| 400 | 400 | 400 | `1.00` (clamped up to the floor) |
+| 800 | 800 | 800 | `1.00` (exactly at `MIN_ELO`) |
+| 1800 | 1800 | 1800 | `1.50` (midpoint) |
+| 2000 | 2400 | 2200 | `1.70` |
+| 2800 | 2800 | 2800 | `2.00` (exactly at `MAX_ELO`) |
+| 3000 | 3000 | 3000 | `2.00` (clamped down to the ceiling) |
+
+The curve is linear: every 200 rating points of average is exactly `0.1` of
+multiplier, because the 800â€“2800 range is 2000 wide and spans 1.0 of multiplier.
+
+### Rounding
+
+The multiplier is **truncated** (rounded down) to two decimals, and the stake is
+**floored** to a whole stroop.
+
+Truncation rather than round-to-nearest means the multiplier can never land a
+hair *above* `MAX_MULTIPLIER`, and flooring the stake means the contract is
+never asked to move more than the multiplier authorises. Both are the
+conservative direction: a rounding bug must never cost a player extra money.
+
+A whole-number example: average 1700 gives `headroom = (1700 - 800) / 2000 = 0.45`,
+so `multiplier = 1.45`. A base stake of `101` stroops then becomes
+`floor(101 x 1.45) = floor(146.45) = 146` - rounded **down**, never up.
+
+### Failure policy
+
+**A failed rating lookup prices the match at the base stake (multiplier 1).**
+
+This is the conservative direction by construction. A player must never lose
+money because an external API was slow, and defaulting *up* would let an outage
+inflate stakes. Every failure path in `elo.ts` â€” unknown user, 404, 429, network
+error, malformed payload, account with no rated games â€” resolves to "no rating"
+rather than throwing, and `resolveMultiplier` turns that into multiplier 1.
+
+Two details worth stating explicitly:
+
+- **An unknown player is rated `MIN_ELO` (800), not a realistic-looking default.**
+  Substituting, say, 1500 for a player we failed to look up would hand them a
+  1.25x uplift they did not earn. Assuming the floor treats an unknown player
+  exactly like a beginner.
+- **One known rating does not uplift the match.** If only one rating resolves,
+  the match is priced at the base stake even when the surviving rating is
+  2800. The uplift prices the *match*, and half of that input is missing. The
+  result is flagged `degraded: true` with a reason so it can be logged.
+
+### Stored match metadata
+
+`resolveMatchMultiplier` returns the multiplier *and* the inputs it used, so the
+pricing decision stays auditable after the fact:
+
+| Field | Meaning |
+| --- | --- |
+| `multiplier` | Applied to the base stake; always `>= 1` |
+| `player1Elo`, `player2Elo` | Ratings used, including any substituted `UNKNOWN_ELO` |
+| `averageElo` | Average of the two |
+| `degraded` | `true` when either rating was substituted |
+| `reason` | Present only when `degraded` |
+
+The match record stores these alongside the base and final stake, so a dispute
+about "why was this match priced at 1.7x" can be settled by reading the record
+rather than re-deriving it from a rating that has since changed.
+
+### Configuration
+
+```env
+# Optional â€” override the curve without a code change.
+ELO_MIN_MULTIPLIER_ELO=800
+ELO_MAX_MULTIPLIER_ELO=2800
+ELO_BASE_MULTIPLIER=1.0
+ELO_MAX_MULTIPLIER=2.0
+```
+
+### Tests
+
+`apps/backend/tests/elo-multiplier.test.ts` (38 tests) covers the formula
+exhaustively, because this function decides how much real money is escrowed:
+
+- both boundaries (`MIN_ELO`, `MAX_ELO`) and values beyond them in both
+  directions, to prove the clamps hold
+- symmetry under argument order, and that the result depends on the average
+  rather than the difference
+- monotonicity across the whole range, checked in 200-point steps
+- an exact table of eleven known rating/multiplier pairs
+- the truncation cases, including one that does not divide evenly
+- degenerate and inverted configuration ranges, which would otherwise divide
+  by zero and emit `NaN` into a stake amount
+- every missing-rating shape, including `NaN` and `Infinity`
+- `RangeError` guards rejecting a non-positive stake or a sub-1 multiplier
+
+`apps/backend/tests/elo.test.ts` (21 tests) covers the lookup: URL
+construction and encoding, the variant preference order, and the requirement
+that every failure mode degrades to `null` rather than throwing.
