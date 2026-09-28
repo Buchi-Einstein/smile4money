@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Networks, rpc } from '@stellar/stellar-sdk';
+import { DISPUTE_WINDOW_LEDGERS, SECONDS_PER_LEDGER } from '../constants';
 
 type MatchState = 'Pending' | 'Active' | 'PendingResult' | 'Completed' | 'Cancelled';
 
@@ -49,15 +50,6 @@ type FetchStatus = 'idle' | 'loading' | 'error';
 const TERMINAL_STATES: MatchState[] = ['Completed', 'Cancelled'];
 
 /**
- * Must match `DISPUTE_WINDOW_LEDGERS` in `contracts/escrow/src/lib.rs`.
- * 17 280 ledgers × 5 s / ledger = 86 400 s = 24 hours.
- */
-const DISPUTE_WINDOW_LEDGERS = 17_280;
-
-/** Average Stellar ledger close time in seconds. */
-const LEDGER_CLOSE_SECS = 5;
-
-/**
  * Compute how many seconds remain in the dispute window.
  *
  * @param pendingResultLedger  The ledger at which submit_result was called.
@@ -71,7 +63,7 @@ function computeDisputeSecondsRemaining(
   elapsedSeconds: number,
 ): number {
   const ledgersRemaining = pendingResultLedger + DISPUTE_WINDOW_LEDGERS - currentLedger;
-  const secondsFromLedgers = ledgersRemaining * LEDGER_CLOSE_SECS;
+  const secondsFromLedgers = ledgersRemaining * SECONDS_PER_LEDGER;
   return Math.max(0, secondsFromLedgers - elapsedSeconds);
 }
 

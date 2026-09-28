@@ -934,18 +934,46 @@ Emitted when admin rights are transferred via `transfer_admin`.
 
 ## Constants
 
-### Escrow Contract
+Every ledger duration and identifier limit is defined **once** in
+`contracts/smile4money-common/src/constants.rs` and re-exported by each contract's own
+`constants` module, so the escrow and oracle contracts can never drift apart. The
+TypeScript mirror of the same values is `apps/frontend/src/constants.ts`.
+
+Each constant carries a doc comment citing its source (Stellar documentation, or the
+ADR that decided the policy).
+
+### Shared (escrow + oracle)
+
+`contracts/escrow/src/constants.rs`, `contracts/oracle/src/constants.rs`
 
 ```rust
-const MATCH_TTL_LEDGERS: u32 = 518_400; // ~30 days at 5 s/ledger
-const MAX_GAME_ID_LEN: u32   = 64;      // Maximum game_id byte length
+pub const SECONDS_PER_LEDGER: u32   = 5;         // ~5 s/ledger (Stellar network target)
+pub const LEDGERS_PER_DAY: u32      = 17_280;    // 86_400 / 5
+pub const LEDGERS_PER_WEEK: u32     = 120_960;   // 604_800 / 5
+pub const MATCH_TTL_LEDGERS: u32    = 518_400;   // ~30 days
+pub const DISPUTE_WINDOW_LEDGERS: u32 = LEDGERS_PER_DAY; // ~24 hours (ADR-001)
+pub const TIMEOUT_LEDGERS: u32      = LEDGERS_PER_WEEK;  // ~7 days (ADR-001)
+pub const MAX_GAME_ID_LEN: u32      = 64;        // Maximum game_id byte length
 ```
 
-### Oracle Contract
+### Escrow only
+
+`contracts/escrow/src/constants.rs`
 
 ```rust
-const MATCH_TTL_LEDGERS: u32 = 518_400; // ~30 days at 5 s/ledger
-const MAX_GAME_ID_LEN: u32   = 64;      // Maximum game_id byte length
+pub const MIN_STAKE: i128               = 1;
+pub const MAX_STAKE: i128               = 10_000_000_000_000;
+pub const INSTANCE_LIFETIME_THRESHOLD: u32 = MATCH_TTL_LEDGERS;
+pub const INSTANCE_BUMP_AMOUNT: u32       = MATCH_TTL_LEDGERS;
+pub const ESCROW_RESERVE_BUFFER_STROOPS: i128 = 15_000_000; // 1.5 XLM
+```
+
+### Oracle only
+
+`contracts/oracle/src/constants.rs`
+
+```rust
+pub const MAX_LIST_LIMIT: u32 = 100;
 ```
 
 ---

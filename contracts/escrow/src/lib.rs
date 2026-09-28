@@ -54,70 +54,15 @@
 
 #![no_std]
 
+mod constants;
 mod errors;
 mod types;
+
+pub use constants::*;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, TryFromVal, Vec};
 use types::{DataKey, Match, MatchState, OptionalWinner, Platform, Winner};
-
-/// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
-const MATCH_TTL_LEDGERS: u32 = 518_400;
-
-/// Minimum stake amount in the smallest token unit (1 stroop).
-/// Prevents economically meaningless zero-stake matches.
-const MIN_STAKE: i128 = 1;
-
-/// Maximum stake amount in the smallest token unit.
-/// Prevents a single match from locking unbounded funds in escrow,
-/// concentrating risk, and amplifying the impact of any exploit.
-const MAX_STAKE: i128 = 10_000_000_000_000;
-
-/// Instance-storage TTL threshold (~30 days at 5s/ledger).
-/// Instance entries (oracle, admin, token, paused, match_count) are
-/// extended to this many ledgers from the current ledger on every write.
-/// Without this, metadata entries would expire and the contract would
-/// become non-functional with storage-not-found errors.
-const INSTANCE_LIFETIME_THRESHOLD: u32 = 518_400;
-
-/// The number of ledgers to extend instance-storage entries to.
-/// Uses the same ~30-day window as persistent match storage.
-const INSTANCE_BUMP_AMOUNT: u32 = 518_400;
-
-/// Maximum allowed byte length for a game_id string.
-const MAX_GAME_ID_LEN: u32 = 64;
-
-/// Dispute window: ~24 hours at 5s/ledger (17 280 ledgers).
-/// After an oracle result is submitted, the admin has this many ledgers to call
-/// `override_result` before the result is finalised and payout is executed.
-const DISPUTE_WINDOW_LEDGERS: u32 = 17_280;
-
-/// Match timeout: ~7 days at 5s/ledger (120 960 ledgers).
-/// If a match has been `Active` for longer than this many ledgers without an oracle
-/// result, either player may call `claim_timeout` to reclaim their stake.
-const TIMEOUT_LEDGERS: u32 = 120_960;
-
-/// Reserve buffer (in stroops) that the contract must always retain **after** a
-/// payout, in order to satisfy Stellar's minimum-account-balance rule and leave
-/// a small operational safety margin.
-///
-/// Every Stellar account (including the address that backs a Soroban contract)
-/// must hold at least 2 base reserves = **1 XLM** just to exist on the ledger.
-/// If an escrow payout would reduce the contract balance below that threshold,
-/// the underlying Stellar `PAYMENT` / `transfer` op aborts and the match state
-/// machine is left inconsistent (state not advanced, funds not sent).
-///
-/// We therefore require that after any payout the contract still holds at least
-/// `ESCROW_RESERVE_BUFFER_STROOPS` of the configured token. When the configured
-/// token is the native XLM token this value is the literal stroop reserve kept
-/// in the account. For non-native tokens (e.g. USDC) the same constant still
-/// serves as a floor — the real XLM minimum is still provided by a separate
-/// admin-funded 1.5 XLM native top-up (see `docs/deployment.md`), and the
-/// identical on-chain check prevents a 100%-held-USDC balance from causing a
-/// confusing generic `TransferFailed`.
-///
-/// `15 000 000 stroops = 1.5 XLM` (1 XLM minimum base reserve + 0.5 XLM slack).
-const ESCROW_RESERVE_BUFFER_STROOPS: i128 = 15_000_000;
 
 fn is_zero_address(env: &Env, addr: &Address) -> bool {
     // The all-zeros Stellar account key encodes to this strkey.
@@ -211,6 +156,19 @@ impl EscrowContract {
             }
         }
         true
+    }
+
+    /// Extend the lifetime of every instance-storage entry held by this contract.
+    ///
+    /// Instance storage (oracle, admin, token, paused, match_count) shares a single
+    /// TTL, so it is bumped as a unit after every mutating call. Without this the
+    /// instance entries would expire while a long-running tournament of matches was
+    /// still in progress and the contract would start failing with storage-not-found
+    /// errors.
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Pre-flight check that the contract retains at least

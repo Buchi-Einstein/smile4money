@@ -3619,7 +3619,7 @@ mod proptest_state_machine {
             // Drive to PendingResult then advance past dispute window
             client.submit_result(&id, &String::from_str(&env, "prop-completed"), &winner, &oracle);
             // Advance ledger past the dispute window
-            env.ledger().set_sequence_number(env.ledger().sequence() + 17_281);
+            env.ledger().set_sequence_number(env.ledger().sequence() + crate::DISPUTE_WINDOW_LEDGERS + 1);
             client.finalize_result(&id, &player1);
 
             // After Completed: every mutating call must be rejected
@@ -3856,7 +3856,7 @@ mod proptest_state_machine {
                 client.deposit(&id, &player1);
                 client.deposit(&id, &player2);
                 client.submit_result(&id, &game_id, &Winner::Player1, &oracle);
-                env.ledger().set_sequence_number(env.ledger().sequence() + 17_281);
+                env.ledger().set_sequence_number(env.ledger().sequence() + crate::DISPUTE_WINDOW_LEDGERS + 1);
                 client.finalize_result(&id, &player1);
             } else {
                 client.cancel_match(&id, &player1);
