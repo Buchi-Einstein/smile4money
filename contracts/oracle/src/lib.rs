@@ -51,21 +51,15 @@
 
 #![no_std]
 
+mod constants;
 mod errors;
 mod types;
+
+pub use constants::*;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
 use types::{DataKey, InstanceState, MatchResult, ResultEntry};
-
-/// ~30 days at 5s/ledger.
-const MATCH_TTL_LEDGERS: u32 = 518_400;
-
-/// Maximum allowed byte length for a game_id string.
-const MAX_GAME_ID_LEN: u32 = 64;
-
-/// Maximum number of entries returned by list_results in a single call.
-const MAX_LIST_LIMIT: u32 = 100;
 
 /// Validate that every byte of `game_id` belongs to the set `[A-Za-z0-9_-]`.
 ///

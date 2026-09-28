@@ -77,7 +77,8 @@ We implement a **24-hour dispute window** (`DISPUTE_WINDOW_LEDGERS = 17_280` at 
 ### Code Reference
 
 ```rust
-const DISPUTE_WINDOW_LEDGERS: u32 = 17_280; // ~24 hours at 5s/ledger
+// contracts/smile4money-common/src/constants.rs
+pub const DISPUTE_WINDOW_LEDGERS: u32 = LEDGERS_PER_DAY; // ~24 hours at 5s/ledger
 
 pub fn submit_result(...) -> Result<(), Error> {
     // ... validation ...

@@ -1183,8 +1183,15 @@ exports[`MatchStatus — snapshots > matches snapshot: pending state 1`] = `
         class="deposit-status"
         data-testid="deposit-status"
       >
-        <span>
-          Player 1: 
+        <span
+          class="deposit-status-row"
+        >
+          <span
+            class="match-info-label"
+          >
+            Player 1:
+          </span>
+           
           ✓
            
           <span
@@ -1197,9 +1204,14 @@ exports[`MatchStatus — snapshots > matches snapshot: pending state 1`] = `
             )
           </span>
         </span>
-        <br />
-        <span>
-          Player 2:
+        <span
+          class="deposit-status-row"
+        >
+          <span
+            class="match-info-label"
+          >
+            Player 2:
+          </span>
            
           <span
             class="address-small"

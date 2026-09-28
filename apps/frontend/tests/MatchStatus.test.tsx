@@ -2,6 +2,10 @@ import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { MatchStatus } from '../src/components/MatchStatus';
+import { DISPUTE_WINDOW_LEDGERS, SECONDS_PER_LEDGER } from '../src/constants';
+
+/** Submit ledger used by the dispute-countdown tests below. */
+const SUBMIT_LEDGER = 1000;
 
 vi.mock('@stellar/stellar-sdk', () => ({
   Networks: {
@@ -439,10 +443,9 @@ describe('MatchStatus — PendingResult countdown', () => {
     expect(screen.queryByTestId('dispute-countdown')).not.toBeInTheDocument();
   });
 
-  it('renders the countdown with ~18 h remaining for a freshly submitted result', async () => {
-    // DISPUTE_WINDOW_LEDGERS = 17_280. Submit at ledger 1000, current = 1000
-    // => 17_280 ledgers × 5 s = 86 400 s remaining (~24 h, but we assert the
-    //    element exists and contains a time value)
+  it('renders the countdown with the full window remaining for a freshly submitted result', async () => {
+    // The full dispute window is DISPUTE_WINDOW_LEDGERS ledgers. We assert the
+    // element exists and renders a time value, not the exact figure.
     const onFetchMatch = vi.fn().mockResolvedValue({
       id: '101',
       state: 'PendingResult',
@@ -453,8 +456,8 @@ describe('MatchStatus — PendingResult countdown', () => {
       platform: 'lichess',
       gameId: 'pending-game-2',
       winner: 'Player2',
-      pendingResultLedger: 1000,
-      currentLedger: 1000, // submitted this ledger — full window remaining
+      pendingResultLedger: SUBMIT_LEDGER,
+      currentLedger: SUBMIT_LEDGER, // submitted this ledger — full window remaining
     });
 
     render(<MatchStatus matchId="101" onFetchMatch={onFetchMatch} />);
@@ -465,13 +468,16 @@ describe('MatchStatus — PendingResult countdown', () => {
 
     const countdown = screen.getByTestId('dispute-countdown');
     expect(countdown).toBeInTheDocument();
-    // Should mention hours since 17 280 × 5 s = 86 400 s = 24 h
+    // The full window in seconds is a whole number of hours, so the rendered
+    // value must contain an "h" component rather than only minutes/seconds.
+    const fullWindowSeconds = DISPUTE_WINDOW_LEDGERS * SECONDS_PER_LEDGER;
+    expect(fullWindowSeconds % 3600).toBe(0);
+    expect(Math.floor(fullWindowSeconds / 3600)).toBeGreaterThan(0);
     expect(screen.getByTestId('dispute-countdown-value').textContent).toMatch(/h/);
     expect(countdown.textContent).toMatch(/Payout available in/i);
   });
 
   it('shows half-elapsed countdown when current ledger is mid-window', async () => {
-    // Submit at 1000, current = 9640 (halfway through 17 280) => ~12 h left
     const onFetchMatch = vi.fn().mockResolvedValue({
       id: '102',
       state: 'PendingResult',
@@ -481,8 +487,9 @@ describe('MatchStatus — PendingResult countdown', () => {
       token: 'xlm',
       platform: 'lichess',
       gameId: 'pending-game-3',
-      pendingResultLedger: 1000,
-      currentLedger: 9640, // 1000 + 8640 ledgers in = halfway
+      pendingResultLedger: SUBMIT_LEDGER,
+      // Exactly halfway through the window.
+      currentLedger: SUBMIT_LEDGER + Math.floor(DISPUTE_WINDOW_LEDGERS / 2),
     });
 
     render(<MatchStatus matchId="102" onFetchMatch={onFetchMatch} />);
@@ -495,7 +502,6 @@ describe('MatchStatus — PendingResult countdown', () => {
   });
 
   it('shows "available now" when the dispute window has fully elapsed', async () => {
-    // Submit at 1000, current = 1000 + 17 280 + 1 = 18 281 — window is past
     const onFetchMatch = vi.fn().mockResolvedValue({
       id: '103',
       state: 'PendingResult',
@@ -505,8 +511,9 @@ describe('MatchStatus — PendingResult countdown', () => {
       token: 'xlm',
       platform: 'lichess',
       gameId: 'pending-game-4',
-      pendingResultLedger: 1000,
-      currentLedger: 18_281, // 1 ledger past the window close
+      pendingResultLedger: SUBMIT_LEDGER,
+      // One ledger past the window close.
+      currentLedger: SUBMIT_LEDGER + DISPUTE_WINDOW_LEDGERS + 1,
     });
 
     render(<MatchStatus matchId="103" onFetchMatch={onFetchMatch} />);

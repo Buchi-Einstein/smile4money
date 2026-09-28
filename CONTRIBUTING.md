@@ -95,6 +95,93 @@ Before submitting a PR, confirm:
 - [ ] New behaviour is covered by tests
 - [ ] No secrets or `.env` files are committed
 
+## Code Review Process
+
+### Approval Requirements
+
+- **Minimum approvals required**: 1 approval from a repository maintainer
+- **Who can approve**: Repository maintainers with write access
+- **When approval is required**: All PRs must be approved before they can be merged to `master`
+
+### Review SLA (Service Level Agreement)
+
+We aim to maintain responsive code review:
+
+- **Initial review response**: Within 3 business days of PR submission
+- **Subsequent responses**: Within 2 business days of new activity (e.g., updates, replies to comments)
+- **Priority PRs** (documentation, critical fixes, small changes): May receive faster reviews
+
+If a PR does not receive a review within the SLA, you can:
+- Mention a reviewer with `@reviewer-name`
+- Post a message in the team communication channel
+- Contact the maintainers directly
+
+### Review Criteria
+
+Reviewers will evaluate PRs based on:
+
+1. **Code Quality**
+   - Follows project code style and conventions
+   - No unnecessary complexity or duplication
+   - Proper error handling and edge cases
+   - Clear, maintainable logic
+
+2. **Testing**
+   - All new behaviour is covered by tests
+   - Tests are meaningful and comprehensive
+   - Existing tests still pass
+
+3. **Documentation**
+   - Code changes are documented where appropriate
+   - Complex logic includes comments
+   - Breaking changes are noted in the PR description
+
+4. **Security & Performance**
+   - No security vulnerabilities introduced
+   - No performance regressions
+   - Secrets and sensitive data are not committed
+
+5. **Commit Quality**
+   - Follows Conventional Commits format
+   - Commits are logically organized
+   - Commit messages are clear and descriptive
+
+### Merge Requirements
+
+A PR can only be merged when ALL of the following conditions are met:
+
+1. **At least 1 approval** from a repository maintainer
+2. **All CI checks pass**:
+   - Escrow unit & doc tests (`Escrow Tests`)
+   - Oracle unit & doc tests (`Oracle Tests`)
+   - Code coverage ≥ 80% (`Coverage`)
+   - Clippy with zero warnings (`Clippy`)
+   - Rust formatting (`Format`)
+   - Prettier frontend formatting (`Prettier`)
+   - WASM build succeeds (`Build`)
+   - environments.toml is valid (`Validate environments.toml`)
+   - Frontend type-check, lint, and tests pass (`Frontend`)
+3. **No unresolved comments** from reviewers
+4. **Branch is up to date** with `master`
+5. **A changelog entry is present** (if the change affects users or introduces breaking changes)
+   - For documentation-only or internal refactoring: changelog entry may be optional
+   - Include a brief description of the change in the appropriate section
+
+### The Review & Merge Process
+
+1. **Submit your PR** with a clear title and description linking to issue(s) using `Closes #<N>`
+2. **Address feedback** by pushing new commits to your branch (do not rewrite history)
+3. **Request re-review** after addressing all comments by clicking "Re-request review"
+4. **Once approved**, a maintainer will merge using **squash merge** to keep history linear
+5. **Ensure your branch is up to date** — GitHub will prevent merging if your branch is behind `master`
+
+### What to Expect if Changes Are Requested
+
+- Feedback is constructive and collaborative, not critical
+- You will have adequate time to address feedback (typically 1 week for non-critical comments)
+- If consensus is unclear, you can ask for clarification or escalate to other maintainers
+- Minor suggestions are often marked as `nit:` for optional improvements
+
 ## CI Security: Action Pinning
 
 All third-party GitHub Actions used in `.github/workflows/*.yml` **must** be pinned to their full immutable commit SHA, not to a version tag. This prevents supply-chain attacks where a tag is silently moved to a malicious commit.
